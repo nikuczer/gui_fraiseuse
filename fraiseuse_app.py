@@ -17,7 +17,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_TITLE   = "Fraiseuse VM32L"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 DEFAULT_SPINDLE_MAX_RPM = 3000
 DEFAULT_SPINDLE_MIN_RPM = 500
@@ -32,50 +32,16 @@ CATEGORY_CHANFREIN  = {"Fraise à chanfreiner"}
 CATEGORY_FRAISES    = {"Fraise 2 tailles", "Fraise 3 tailles", "Fraise hémisphérique"}
 CATEGORY_FORETS     = {"Foret", "Foret à centrer"}
 
-# ── Tables fz (mm/dent) — interpolation linéaire ──
-FZ_TABLES = {
-    ("HSS", "acier"):    [(4, 0.02), (6, 0.03), (8, 0.04), (10, 0.05), (12, 0.06), (16, 0.07), (20, 0.08)],
-    ("Carbure", "acier"): [(4, 0.04), (6, 0.05), (8, 0.06), (10, 0.08), (12, 0.10), (16, 0.12), (20, 0.15)],
-    ("HSS", "alu"):      [(6, 0.06), (8, 0.08), (10, 0.10), (12, 0.12), (16, 0.15), (20, 0.18)],
-    ("Carbure", "alu"):  [(6, 0.08), (8, 0.10), (10, 0.13), (12, 0.15), (16, 0.20), (20, 0.25)],
-}
-
-VC_TABLES = {
-    ("HSS", "acier"): 25, ("Carbure", "acier"): 80,
-    ("HSS", "alu"): 200,  ("Carbure", "alu"): 400,
-}
-
-
-def _interp_fz(table, diam):
-    if not table:
-        return 0.0
-    if diam <= table[0][0]:
-        return table[0][1]
-    if diam >= table[-1][0]:
-        return table[-1][1]
-    for i in range(len(table) - 1):
-        d0, f0 = table[i]
-        d1, f1 = table[i + 1]
-        if d0 <= diam <= d1:
-            t = (diam - d0) / (d1 - d0)
-            return round(f0 + t * (f1 - f0), 4)
-    return table[-1][1]
-
-
 def calc_cutting_params(tool, piece_mat="acier"):
-    """Calcule RPM, fz, avance pour un outil donné et un matériau pièce."""
-    matiere = tool.get("matiere", "HSS")
+    """Lit les paramètres pré-calculés par tool_builder directement depuis l'outil."""
     diam = tool.get("diametre", 10.0)
     nb_dents = tool.get("nb_dents", 2)
-    mat_key = "Carbure" if "Carbure" in matiere or "Cermet" in matiere else "HSS"
-
-    key = (mat_key, piece_mat)
-    table = FZ_TABLES.get(key, FZ_TABLES.get(("HSS", piece_mat), []))
-    fz = _interp_fz(table, diam)
-    vc = VC_TABLES.get(key, 25)
-    rpm_ideal = int((vc * 1000) / (math.pi * diam)) if diam > 0 else 0
-    rpm = max(DEFAULT_SPINDLE_MIN_RPM, min(DEFAULT_SPINDLE_MAX_RPM, rpm_ideal))
-    feed = fz * nb_dents * rpm
+    fz = tool.get(f"fz_max_{piece_mat}", 0.0)
+    vc = tool.get(f"vc_{piece_mat}", 0)
+    rpm = tool.get(f"rpm_{piece_mat}", 0)
+    feed = tool.get(f"vf_{piece_mat}", 0.0)
+    # Détecter si le RPM a été bridé
+    rpm_ideal = int((vc * 1000) / (math.pi * diam)) if diam > 0 and vc > 0 else 0
     return {
         "vc": vc, "fz": fz, "rpm_ideal": rpm_ideal, "rpm": rpm,
         "feed": feed, "diam": diam, "nb_dents": nb_dents,
@@ -182,6 +148,20 @@ class App(tk.Tk):
         self.z_vmax = tk.DoubleVar(value=500.0)
         self.z_accel = tk.DoubleVar(value=300.0)
 
+        # ── Position X (tracking en steps, affiché en mm) ──
+        self.pos_x_steps = 0  # position absolue en steps (entier, source de vérité)
+        self.pos_x_mm = tk.DoubleVar(value=0.0)  # affiché
+        self.pos_x_str = tk.StringVar(value="0.000")
+        self.pos_x_mm.trace_add('write', lambda *a: self.pos_x_str.set(
+            f"{self.pos_x_mm.get():.3f}"))
+
+        # ── Butées logicielles X ──
+        self.limit_x_enabled = tk.BooleanVar(value=False)
+        self.limit_x_left = tk.DoubleVar(value=-100.0)   # mm (négatif = gauche)
+        self.limit_x_right = tk.DoubleVar(value=100.0)    # mm (positif = droite)
+        self.limit_x_left_set = False   # butée gauche définie ?
+        self.limit_x_right_set = False  # butée droite définie ?
+
         # ── Position Z (pour hold-to-move simulation) ──
         self.pos_z_mm = tk.DoubleVar(value=0.0)
         self.home_z_mm = tk.DoubleVar(value=0.0)
@@ -253,16 +233,19 @@ class App(tk.Tk):
         self.notebook.pack(fill="both", expand=True)
 
         self.tab_outil = ttk.Frame(self.notebook)
+        self.tab_pos = ttk.Frame(self.notebook)
         self.tab_trap = ttk.Frame(self.notebook)
         self.tab_mech = ttk.Frame(self.notebook)
         self.tab_io = ttk.Frame(self.notebook)
 
         self.notebook.add(self.tab_outil, text=" Outil ")
+        self.notebook.add(self.tab_pos, text=" Position ")
         self.notebook.add(self.tab_trap, text=" Trapeze & Z ")
         self.notebook.add(self.tab_mech, text=" Mecanique ")
         self.notebook.add(self.tab_io, text=" I/O ")
 
         self._build_outil_tab(self.tab_outil)
+        self._build_position_tab(self.tab_pos)
         self._build_trapezes_tab(self.tab_trap)
         self._build_mechanics_tab(self.tab_mech)
         self._build_io_tab(self.tab_io)
@@ -359,6 +342,195 @@ class App(tk.Tk):
                    command=lambda: self._tool_navigate(-1)).pack(side="left", expand=True, fill="x", padx=(0, 4))
         ttk.Button(nav_frame, text="Suivant >>", style='Med.TButton',
                    command=lambda: self._tool_navigate(1)).pack(side="left", expand=True, fill="x", padx=(4, 0))
+
+    # ── Position tab ──
+    def _build_position_tab(self, tab):
+        root = ttk.Frame(tab, padding=6)
+        root.pack(fill="both", expand=True)
+        root.columnconfigure(0, weight=1)
+        root.columnconfigure(1, weight=1)
+
+        # ── Colonne gauche : position X + jog ──
+        left = ttk.LabelFrame(root, text="Position X", padding=6)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=(0, 4))
+        left.columnconfigure(0, weight=1)
+
+        pos_frame = ttk.Frame(left)
+        pos_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(pos_frame, text="X =", font=("Helvetica", 18, "bold")).pack(side="left")
+        self.lbl_pos_x = ttk.Label(pos_frame, textvariable=self.pos_x_str,
+                                    font=("Helvetica", 32, "bold"))
+        self.lbl_pos_x.pack(side="left", padx=(6, 0))
+        ttk.Label(pos_frame, text="mm", font=("Helvetica", 18)).pack(side="left", padx=(4, 0))
+
+        # Jog buttons
+        jog_frame = ttk.Frame(left)
+        jog_frame.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        jog_values = [("-10", -10), ("-1", -1), ("-0.1", -0.1),
+                      ("+0.1", 0.1), ("+1", 1), ("+10", 10)]
+        for c, (txt, delta) in enumerate(jog_values):
+            ttk.Button(jog_frame, text=txt, style='Jog.TButton',
+                       command=lambda d=delta: self._jog_x(d)).grid(
+                row=0, column=c, sticky="nsew", padx=2, pady=2, ipady=4)
+            jog_frame.columnconfigure(c, weight=1)
+
+        # Zero + Home buttons
+        ctl_frame = ttk.Frame(left)
+        ctl_frame.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        ttk.Button(ctl_frame, text="ZERO X (ici)", style='Med.TButton',
+                   command=self._zero_x).grid(row=0, column=0, sticky="nsew", padx=2, ipady=4)
+        ctl_frame.columnconfigure(0, weight=1)
+
+        # Status butée
+        self.lbl_limit_status = ttk.Label(left, text="", style='Info.TLabel')
+        self.lbl_limit_status.grid(row=3, column=0, sticky="w", pady=(2, 0))
+
+        # ── Colonne droite : butées logicielles ──
+        right = ttk.LabelFrame(root, text="Butees logicielles X", padding=6)
+        right.grid(row=0, column=1, sticky="nsew", padx=(4, 0), pady=(0, 4))
+        right.columnconfigure(0, weight=1)
+        right.columnconfigure(1, weight=1)
+
+        # Enable/disable
+        chk = ttk.Checkbutton(right, text="Activer les butees",
+                               variable=self.limit_x_enabled,
+                               command=self._update_limit_display)
+        chk.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+        # Butée gauche
+        ttk.Label(right, text="Butee GAUCHE :", font=("Helvetica", 14)).grid(
+            row=1, column=0, sticky="w", pady=(0, 2))
+        self.lbl_limit_left = ttk.Label(right, text="Non definie",
+                                         font=("Helvetica", 16, "bold"))
+        self.lbl_limit_left.grid(row=2, column=0, sticky="w", pady=(0, 4))
+        ttk.Button(right, text="Definir ICI", style='Med.TButton',
+                   command=self._set_limit_left).grid(
+            row=3, column=0, sticky="ew", padx=(0, 2), ipady=4)
+
+        # Butée droite
+        ttk.Label(right, text="Butee DROITE :", font=("Helvetica", 14)).grid(
+            row=1, column=1, sticky="w", padx=(10, 0), pady=(0, 2))
+        self.lbl_limit_right = ttk.Label(right, text="Non definie",
+                                          font=("Helvetica", 16, "bold"))
+        self.lbl_limit_right.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=(0, 4))
+        ttk.Button(right, text="Definir ICI", style='Med.TButton',
+                   command=self._set_limit_right).grid(
+            row=3, column=1, sticky="ew", padx=(2, 0), ipady=4)
+
+        # Saisie manuelle des limites
+        ttk.Separator(right).grid(row=4, column=0, columnspan=2, sticky="ew", pady=8)
+        manual_frame = ttk.Frame(right)
+        manual_frame.grid(row=5, column=0, columnspan=2, sticky="ew")
+        manual_frame.columnconfigure(1, weight=1)
+        manual_frame.columnconfigure(3, weight=1)
+
+        ttk.Label(manual_frame, text="G:").grid(row=0, column=0, sticky="e", padx=(0, 2))
+        self._num_entry(manual_frame, self.limit_x_left, width=7, decimals=1,
+                        row=0, column=1, sticky="ew")
+        ttk.Label(manual_frame, text="mm   D:").grid(row=0, column=2, sticky="e", padx=(8, 2))
+        self._num_entry(manual_frame, self.limit_x_right, width=7, decimals=1,
+                        row=0, column=3, sticky="ew")
+        ttk.Label(manual_frame, text="mm").grid(row=0, column=4, sticky="w", padx=(2, 0))
+
+        # Effacer butées
+        ttk.Button(right, text="Effacer les butees", style='Med.TButton',
+                   command=self._clear_limits).grid(
+            row=6, column=0, columnspan=2, sticky="ew", pady=(8, 0), ipady=4)
+
+        # Barre info en bas
+        info_frame = ttk.Frame(root)
+        info_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.lbl_pos_info = ttk.Label(info_frame, text="Butees software = protection, pas un remplacement de fin de course hardware",
+                                       style='Small.TLabel')
+        self.lbl_pos_info.pack(anchor="center")
+
+    # ── Position X helpers ──
+    def _steps_per_mm(self):
+        return (self.steps_rev_x.get() * self.microstep_x.get()) / max(self.lead_x.get(), 1e-9)
+
+    def _update_pos_x_from_steps(self):
+        self.pos_x_mm.set(round(self.pos_x_steps / self._steps_per_mm(), 3))
+
+    def _zero_x(self):
+        # Recaler les butées par rapport au nouveau zéro avant de remettre à 0
+        old_pos = self.pos_x_mm.get()
+        if self.limit_x_left_set:
+            self.limit_x_left.set(round(self.limit_x_left.get() - old_pos, 3))
+        if self.limit_x_right_set:
+            self.limit_x_right.set(round(self.limit_x_right.get() - old_pos, 3))
+        self.pos_x_steps = 0
+        self._update_pos_x_from_steps()
+        self._update_limit_display()
+
+    def _set_limit_left(self):
+        self.limit_x_left.set(round(self.pos_x_mm.get(), 3))
+        self.limit_x_left_set = True
+        self.limit_x_enabled.set(True)
+        self._update_limit_display()
+
+    def _set_limit_right(self):
+        self.limit_x_right.set(round(self.pos_x_mm.get(), 3))
+        self.limit_x_right_set = True
+        self.limit_x_enabled.set(True)
+        self._update_limit_display()
+
+    def _clear_limits(self):
+        self.limit_x_left_set = False
+        self.limit_x_right_set = False
+        self.limit_x_enabled.set(False)
+        self.limit_x_left.set(-100.0)
+        self.limit_x_right.set(100.0)
+        self._update_limit_display()
+
+    def _update_limit_display(self):
+        if self.limit_x_left_set:
+            self.lbl_limit_left.config(text=f"{self.limit_x_left.get():.3f} mm")
+        else:
+            self.lbl_limit_left.config(text="Non definie")
+        if self.limit_x_right_set:
+            self.lbl_limit_right.config(text=f"{self.limit_x_right.get():.3f} mm")
+        else:
+            self.lbl_limit_right.config(text="Non definie")
+
+        if self.limit_x_enabled.get() and (self.limit_x_left_set or self.limit_x_right_set):
+            self.lbl_limit_status.config(text="Butees ACTIVES", style='IOon.TLabel')
+        else:
+            self.lbl_limit_status.config(text="Butees inactives", style='IOoff.TLabel')
+
+    def _clamp_move_x(self, delta_mm):
+        """Tronque un déplacement X pour respecter les butées logicielles.
+        Retourne le delta effectif (peut être 0 si bloqué)."""
+        if not self.limit_x_enabled.get():
+            return delta_mm
+
+        current = self.pos_x_mm.get()
+        target = current + delta_mm
+
+        if delta_mm < 0 and self.limit_x_left_set:
+            left = self.limit_x_left.get()
+            if target < left:
+                target = left
+        if delta_mm > 0 and self.limit_x_right_set:
+            right = self.limit_x_right.get()
+            if target > right:
+                target = right
+
+        return target - current
+
+    def _jog_x(self, delta_mm):
+        """Déplacement X simulé avec respect des butées."""
+        if self.io_active:
+            return
+        clamped = self._clamp_move_x(delta_mm)
+        if abs(clamped) < 1e-6:
+            # Bloqué par butée
+            self.lbl_limit_status.config(text="BUTEE ATTEINTE !", style='Warn.TLabel')
+            self.after(1500, self._update_limit_display)
+            return
+        clamped_steps = round(clamped * self._steps_per_mm())
+        self.pos_x_steps += clamped_steps
+        self._update_pos_x_from_steps()
+        self._update_limit_display()
 
     # ── Trapèzes & Z tab ──
     def _build_trapezes_tab(self, tab):
@@ -745,6 +917,16 @@ class App(tk.Tk):
                 "microstep_z": int(self.microstep_z.get()),
                 "lead_z": float(self.lead_z.get()),
             },
+            "limits": {
+                "enabled": bool(self.limit_x_enabled.get()),
+                "left": float(self.limit_x_left.get()),
+                "right": float(self.limit_x_right.get()),
+                "left_set": self.limit_x_left_set,
+                "right_set": self.limit_x_right_set,
+            },
+            "position": {
+                "pos_x_steps": self.pos_x_steps,
+            },
             "app_version": APP_VERSION,
         }
         try:
@@ -771,6 +953,16 @@ class App(tk.Tk):
             self.steps_rev_z.set(int(mech.get("steps_rev_z", self.steps_rev_z.get())))
             self.microstep_z.set(int(mech.get("microstep_z", self.microstep_z.get())))
             self.lead_z.set(float(mech.get("lead_z", self.lead_z.get())))
+            lim = data.get("limits", {})
+            self.limit_x_enabled.set(bool(lim.get("enabled", False)))
+            self.limit_x_left.set(float(lim.get("left", -100.0)))
+            self.limit_x_right.set(float(lim.get("right", 100.0)))
+            self.limit_x_left_set = bool(lim.get("left_set", False))
+            self.limit_x_right_set = bool(lim.get("right_set", False))
+            pos = data.get("position", {})
+            self.pos_x_steps = int(pos.get("pos_x_steps", 0))
+            self._update_pos_x_from_steps()
+            self._update_limit_display()
             if not silent:
                 messagebox.showinfo("Chargement", "Config chargee.")
         except FileNotFoundError:
