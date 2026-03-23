@@ -11,16 +11,23 @@ Onglets:
   - I/O        : état des entrées GPIO (fonctions désactivées)
 """
 
-import math, os, json, time, threading
+import math, os, json
 from typing import Optional
 import tkinter as tk
 from tkinter import ttk, messagebox
+from motor_controller import (
+    MotorController, CmdType, StatusType, Status, Cmd,
+    create_motor_system
+)
 
 APP_TITLE   = "Fraiseuse VM32L"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 
 DEFAULT_SPINDLE_MAX_RPM = 3000
 DEFAULT_SPINDLE_MIN_RPM = 500
+
+# Vf max réaliste (mm/min) — steppers + rigidité bâti
+VF_MAX_STEPPER = 800
 
 TOOL_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tool_list.json")
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fraiseuse_config.json")
@@ -32,18 +39,77 @@ CATEGORY_CHANFREIN  = {"Fraise à chanfreiner"}
 CATEGORY_FRAISES    = {"Fraise 2 tailles", "Fraise 3 tailles", "Fraise hémisphérique"}
 CATEGORY_FORETS     = {"Foret", "Foret à centrer"}
 
+# ── Tables ap max (Ø mm, ap_max mm) — ébauche VM32L ──
+# Acier : conservateur (machine légère, efforts importants)
+AP_MAX_ACIER = [(4, 1.0), (6, 1.5), (8, 2.0), (10, 2.5), (12, 3.0), (16, 4.0), (20, 5.0)]
+# Alu : bien plus permissif (efforts faibles, bonne évacuation copeaux)
+AP_MAX_ALU   = [(4, 3.0), (6, 4.0), (8, 5.0), (10, 6.0), (12, 7.0), (16, 8.0), (20, 10.0)]
+AP_MAX_PLAQ  = [(20, 2.0), (50, 3.0), (80, 4.0)]
+
+
+def _interp_table(table, val):
+    if not table:
+        return 1.0
+    if val <= table[0][0]:
+        return table[0][1]
+    if val >= table[-1][0]:
+        return table[-1][1]
+    for i in range(len(table) - 1):
+        x0, y0 = table[i]
+        x1, y1 = table[i + 1]
+        if x0 <= val <= x1:
+            t = (val - x0) / (x1 - x0)
+            return y0 + t * (y1 - y0)
+    return table[-1][1]
+
+
+def _fz_correction(ae_ratio, ap_ratio):
+    """Correction fz selon engagement ae/Ø et ap/ap_max.
+    Plus l'engagement est fort, plus on réduit le fz pour protéger la machine."""
+    # Correction radiale (ae)
+    if ae_ratio >= 0.9:
+        corr_ae = 0.7     # rainurage
+    elif ae_ratio >= 0.7:
+        corr_ae = 0.85
+    elif ae_ratio >= 0.4:
+        corr_ae = 1.0     # référence
+    elif ae_ratio >= 0.15:
+        corr_ae = 1.15    # chip thinning
+    else:
+        corr_ae = 1.25
+
+    # Correction axiale (ap) — réduire quand ap est élevé
+    if ap_ratio >= 1.2:
+        corr_ap = 0.5     # très agressif, diviser par 2
+    elif ap_ratio >= 1.0:
+        corr_ap = 0.7     # au-dessus du max recommandé
+    elif ap_ratio >= 0.8:
+        corr_ap = 0.85    # approche du max
+    elif ap_ratio >= 0.5:
+        corr_ap = 1.0     # zone confort
+    else:
+        corr_ap = 1.1     # passes légères = on peut pousser un peu
+
+    return corr_ae * corr_ap
+
+
 def calc_cutting_params(tool, piece_mat="acier"):
     """Lit les paramètres pré-calculés par tool_builder directement depuis l'outil."""
     diam = tool.get("diametre", 10.0)
     nb_dents = tool.get("nb_dents", 2)
     fz = tool.get(f"fz_max_{piece_mat}", 0.0)
     vc = tool.get(f"vc_{piece_mat}", 0)
+    vc_reelle = tool.get(f"vc_reelle_{piece_mat}", 0)
     rpm = tool.get(f"rpm_{piece_mat}", 0)
     feed = tool.get(f"vf_{piece_mat}", 0.0)
     # Détecter si le RPM a été bridé
     rpm_ideal = int((vc * 1000) / (math.pi * diam)) if diam > 0 and vc > 0 else 0
+    # Vc réelle (depuis JSON ou recalculée)
+    if not vc_reelle and diam > 0 and rpm > 0:
+        vc_reelle = round(math.pi * diam * rpm / 1000, 1)
     return {
-        "vc": vc, "fz": fz, "rpm_ideal": rpm_ideal, "rpm": rpm,
+        "vc": vc, "vc_reelle": vc_reelle, "fz": fz,
+        "rpm_ideal": rpm_ideal, "rpm": rpm,
         "feed": feed, "diam": diam, "nb_dents": nb_dents,
         "limited": rpm < rpm_ideal, "boosted": rpm > rpm_ideal,
     }
@@ -132,6 +198,11 @@ class App(tk.Tk):
         self.current_category = "all"
         self.piece_mat = tk.StringVar(value="acier")
 
+        # ── Engagement (ae/ap) ──
+        self.ae_mm = tk.DoubleVar(value=5.0)
+        self.ap_mm = tk.DoubleVar(value=1.0)
+        self._last_tool_id = None  # pour détecter changement d'outil
+
         # ── Mécanique ──
         self.steps_rev_x = tk.IntVar(value=200)
         self.microstep_x = tk.IntVar(value=16)
@@ -178,6 +249,9 @@ class App(tk.Tk):
         self._load_tools()
         self._load_config(silent=True)
 
+        # ── MotorController ──
+        self._init_motor()
+
         # ── Keyboard bindings ──
         self.bind('<Prior>', lambda e: self._tool_navigate(-1))    # PageUp
         self.bind('<Next>', lambda e: self._tool_navigate(1))      # PageDown
@@ -191,6 +265,17 @@ class App(tk.Tk):
         self.bind('<F>', lambda e: self._filter_category("forets"))
         self.bind('<a>', lambda e: self._filter_category("all"))
         self.bind('<A>', lambda e: self._filter_category("all"))
+        self.bind('<plus>', lambda e: self._adjust_ae(1))
+        self.bind('<minus>', lambda e: self._adjust_ae(-1))
+        self.bind('<KP_Add>', lambda e: self._adjust_ae(1))
+        self.bind('<KP_Subtract>', lambda e: self._adjust_ae(-1))
+        self.bind('<equal>', lambda e: self._adjust_ae(1))  # + sans shift
+        self.bind('<9>', lambda e: self._adjust_ap(1))
+        self.bind('<6>', lambda e: self._adjust_ap(-1))
+        self.bind('<KP_9>', lambda e: self._adjust_ap(1))
+        self.bind('<KP_6>', lambda e: self._adjust_ap(-1))
+        self.bind('<5>', lambda e: self._reset_engagement())
+        self.bind('<KP_5>', lambda e: self._reset_engagement())
         self.bind('<F11>', lambda e: self._toggle_fullscreen())
         self.bind('<Escape>', lambda e: self._end_fullscreen())
 
@@ -254,195 +339,511 @@ class App(tk.Tk):
 
     # ── Outil tab ──
     def _build_outil_tab(self, tab):
-        root = ttk.Frame(tab, padding=8)
+        root = ttk.Frame(tab, padding=4)
         root.pack(fill="both", expand=True)
-        root.columnconfigure(0, weight=1)
+        root.columnconfigure(0, weight=0, minsize=210)
+        root.columnconfigure(1, weight=1)
+        root.columnconfigure(2, weight=0, minsize=220)
+        root.rowconfigure(1, weight=1)
 
-        # Barre catégorie
+        # Row 0: category bar
         cat_bar = ttk.Frame(root)
-        cat_bar.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        cat_bar.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 2))
         self.cat_label = ttk.Label(cat_bar, text="TOUS LES OUTILS", style='Cat.TLabel')
         self.cat_label.pack(side="left")
-        hint = ttk.Label(cat_bar, text="s=Surfacer  c=Chanfrein  r=Fraises  f=Forets  a=Tous  PgUp/PgDn=Defiler",
-                         style='Small.TLabel')
-        hint.pack(side="right")
+        ttk.Label(cat_bar, text="s/c/r/f/a  PgUp/Dn  +/-=ae  9/6=ap  5=reset",
+                  style='Small.TLabel').pack(side="right")
 
-        # Zone outil principal
-        tool_frame = ttk.LabelFrame(root, text="Outil selectionne", padding=10)
-        tool_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 4))
-        root.rowconfigure(1, weight=1)
-        tool_frame.columnconfigure(0, weight=1)
-        tool_frame.columnconfigure(1, weight=1)
+        # Col 0: tool info
+        left = ttk.LabelFrame(root, text="Outil", padding=4)
+        left.grid(row=1, column=0, sticky="nsew", padx=(0, 2))
 
-        # Colonne gauche : info outil
-        left = ttk.Frame(tool_frame)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        left.columnconfigure(0, weight=1)
-
-        self.lbl_tool_name = ttk.Label(left, text="---", style='Title.TLabel')
-        self.lbl_tool_name.grid(row=0, column=0, sticky="w")
-
+        self.lbl_tool_name = ttk.Label(left, text="---", font=("Helvetica", 15, "bold"),
+                                        wraplength=200)
+        self.lbl_tool_name.pack(anchor="w")
         self.lbl_tool_type = ttk.Label(left, text="", style='Cat.TLabel')
-        self.lbl_tool_type.grid(row=1, column=0, sticky="w", pady=(2, 6))
+        self.lbl_tool_type.pack(anchor="w")
 
-        info_grid = ttk.Frame(left)
-        info_grid.grid(row=2, column=0, sticky="ew")
-        labels_left = [
-            ("Diametre :", "lbl_diam"),
-            ("Nb dents :", "lbl_dents"),
-            ("Matiere :", "lbl_matiere"),
-            ("Revetement :", "lbl_revet"),
-        ]
-        for i, (txt, attr) in enumerate(labels_left):
-            ttk.Label(info_grid, text=txt, font=("Helvetica", 14)).grid(row=i, column=0, sticky="e", padx=(0, 6))
-            lbl = ttk.Label(info_grid, text="---", font=("Helvetica", 14, "bold"))
+        info = ttk.Frame(left)
+        info.pack(fill="x", pady=(4, 0))
+        for i, (txt, attr) in enumerate([
+            ("D:", "lbl_diam"), ("Z:", "lbl_dents"),
+            ("Mat:", "lbl_matiere"), ("Rev:", "lbl_revet"),
+        ]):
+            ttk.Label(info, text=txt).grid(row=i, column=0, sticky="e", padx=(0, 3))
+            lbl = ttk.Label(info, text="---", font=("Helvetica", 12, "bold"))
             lbl.grid(row=i, column=1, sticky="w")
             setattr(self, attr, lbl)
 
-        self.lbl_tool_notes = ttk.Label(left, text="", style='Small.TLabel', wraplength=300)
-        self.lbl_tool_notes.grid(row=3, column=0, sticky="w", pady=(6, 0))
+        self.lbl_tool_notes = ttk.Label(left, text="", style='Small.TLabel', wraplength=195)
+        self.lbl_tool_notes.pack(anchor="w", pady=(3, 0))
+        self.lbl_tool_counter = ttk.Label(left, text="0/0", font=("Helvetica", 11))
+        self.lbl_tool_counter.pack(anchor="w", pady=(2, 0))
 
-        self.lbl_tool_counter = ttk.Label(left, text="0 / 0", font=("Helvetica", 12))
-        self.lbl_tool_counter.grid(row=4, column=0, sticky="w", pady=(6, 0))
-
-        # Colonne droite : résultats coupe
-        right = ttk.LabelFrame(tool_frame, text="Parametres de coupe", padding=8)
-        right.grid(row=0, column=1, sticky="nsew")
-        right.columnconfigure(0, weight=1)
-
-        # Sélection matériau pièce
-        mat_frame = ttk.Frame(right)
-        mat_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        ttk.Label(mat_frame, text="Piece :", font=("Helvetica", 14)).pack(side="left")
+        mat_frame = ttk.Frame(left)
+        mat_frame.pack(fill="x", pady=(4, 0))
         for label, key in (("Acier", "acier"), ("Alu", "alu")):
             ttk.Radiobutton(mat_frame, text=label, value=key, variable=self.piece_mat,
-                            command=self._update_tool_display).pack(side="left", padx=8)
+                            command=self._on_engagement_changed).pack(side="left", padx=4)
 
-        ttk.Label(right, text="Vitesse broche (tr/min) :").grid(row=1, column=0, sticky="w")
-        self.lbl_rpm = ttk.Label(right, text="---", style='Big.TLabel')
-        self.lbl_rpm.grid(row=2, column=0, sticky="w", pady=(0, 4))
+        # Col 1: Canvas
+        canvas_frame = ttk.LabelFrame(root, text="Engagement", padding=2)
+        canvas_frame.grid(row=1, column=1, sticky="nsew", padx=2)
+        self.eng_canvas = tk.Canvas(canvas_frame, bg="white", highlightthickness=0)
+        self.eng_canvas.pack(fill="both", expand=True)
+        self.eng_canvas.bind("<Configure>", lambda e: self._draw_engagement())
 
-        ttk.Label(right, text="Avance (mm/min) :").grid(row=3, column=0, sticky="w")
-        self.lbl_feed = ttk.Label(right, text="---", style='Big.TLabel')
-        self.lbl_feed.grid(row=4, column=0, sticky="w", pady=(0, 4))
+        # Col 2: Cutting params
+        right = ttk.LabelFrame(root, text="Coupe", padding=4)
+        right.grid(row=1, column=2, sticky="nsew", padx=(2, 0))
 
-        self.lbl_details = ttk.Label(right, text="", style='Small.TLabel', wraplength=300)
-        self.lbl_details.grid(row=5, column=0, sticky="w", pady=(2, 0))
+        ttk.Label(right, text="RPM :").pack(anchor="w")
+        self.lbl_rpm = ttk.Label(right, text="---", font=("Helvetica", 22, "bold"))
+        self.lbl_rpm.pack(anchor="w")
 
-        self.lbl_limit = ttk.Label(right, text="", style='Warn.TLabel')
-        self.lbl_limit.grid(row=6, column=0, sticky="w", pady=(2, 0))
+        ttk.Label(right, text="Avance (mm/min) :").pack(anchor="w")
+        self.lbl_feed = ttk.Label(right, text="---", font=("Helvetica", 22, "bold"))
+        self.lbl_feed.pack(anchor="w")
 
-        self.lbl_foret_info = ttk.Label(right, text="", style='Info.TLabel')
-        self.lbl_foret_info.grid(row=7, column=0, sticky="w", pady=(2, 0))
+        ttk.Separator(right).pack(fill="x", pady=3)
 
-        # Boutons nav en bas
+        ae_f = ttk.Frame(right)
+        ae_f.pack(fill="x")
+        ttk.Label(ae_f, text="ae:").pack(side="left")
+        self.lbl_ae = ttk.Label(ae_f, text="---", font=("Helvetica", 13, "bold"))
+        self.lbl_ae.pack(side="left", padx=(3, 0))
+        self.lbl_ae_pct = ttk.Label(ae_f, text="", style='Small.TLabel')
+        self.lbl_ae_pct.pack(side="left", padx=(3, 0))
+
+        ap_f = ttk.Frame(right)
+        ap_f.pack(fill="x")
+        ttk.Label(ap_f, text="ap:").pack(side="left")
+        self.lbl_ap = ttk.Label(ap_f, text="---", font=("Helvetica", 13, "bold"))
+        self.lbl_ap.pack(side="left", padx=(3, 0))
+        self.lbl_ap_info = ttk.Label(ap_f, text="", style='Small.TLabel')
+        self.lbl_ap_info.pack(side="left", padx=(3, 0))
+
+        q_f = ttk.Frame(right)
+        q_f.pack(fill="x", pady=(2, 0))
+        ttk.Label(q_f, text="Q:").pack(side="left")
+        self.lbl_q = ttk.Label(q_f, text="---", font=("Helvetica", 12))
+        self.lbl_q.pack(side="left", padx=(3, 0))
+
+        ttk.Separator(right).pack(fill="x", pady=3)
+
+        self.lbl_details = ttk.Label(right, text="", style='Small.TLabel', wraplength=210)
+        self.lbl_details.pack(anchor="w")
+        self.lbl_limit = ttk.Label(right, text="", style='Warn.TLabel', wraplength=210)
+        self.lbl_limit.pack(anchor="w")
+        self.lbl_foret_info = ttk.Label(right, text="", style='Info.TLabel', wraplength=210)
+        self.lbl_foret_info.pack(anchor="w")
+
+        # Row 2: nav
         nav_frame = ttk.Frame(root)
-        nav_frame.grid(row=2, column=0, sticky="ew", pady=(4, 0))
-        ttk.Button(nav_frame, text="<< Precedent", style='Med.TButton',
-                   command=lambda: self._tool_navigate(-1)).pack(side="left", expand=True, fill="x", padx=(0, 4))
+        nav_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(2, 0))
+        ttk.Button(nav_frame, text="<< Prec", style='Med.TButton',
+                   command=lambda: self._tool_navigate(-1)).pack(
+            side="left", expand=True, fill="x", padx=(0, 2))
         ttk.Button(nav_frame, text="Suivant >>", style='Med.TButton',
-                   command=lambda: self._tool_navigate(1)).pack(side="left", expand=True, fill="x", padx=(4, 0))
+                   command=lambda: self._tool_navigate(1)).pack(
+            side="left", expand=True, fill="x", padx=(2, 0))
+
+    # ════════════════════════════════════════════
+    #  ENGAGEMENT (ae/ap)
+    # ════════════════════════════════════════════
+    def _get_ap_max(self, diam, piece_mat, plaquettes=False):
+        """ap max de base (reference: ae ~50% du diametre)."""
+        if plaquettes:
+            return _interp_table(AP_MAX_PLAQ, diam)
+        if piece_mat == "alu":
+            return _interp_table(AP_MAX_ALU, diam)
+        return _interp_table(AP_MAX_ACIER, diam)
+
+    def _get_effective_ap_max(self, diam, piece_mat, plaquettes, ae_ratio):
+        """ap max ajuste selon ae: faible ae = on peut monter en ap (contournage).
+        Reference = 50% ae. Cap a 3x le max de base."""
+        base = self._get_ap_max(diam, piece_mat, plaquettes)
+        if ae_ratio < 0.5:
+            factor = min(3.0, 0.5 / max(ae_ratio, 0.05))
+        else:
+            factor = 1.0
+        return base * factor
+
+    def _calc_default_engagement(self):
+        """Meilleure config par defaut pour l'outil/machine."""
+        if not self.filtered_tools:
+            return
+        tool = self.filtered_tools[self.current_index]
+        diam = tool.get("diametre", 10.0)
+        piece_mat = self.piece_mat.get()
+        plaq = tool.get("a_plaquettes", False)
+        is_foret = tool.get("type", "") in CATEGORY_FORETS
+
+        if is_foret:
+            self.ae_mm.set(diam)
+            self.ap_mm.set(0)
+            return
+
+        # ae par defaut: 50% acier, 60% alu, arrondi a 1mm, min 1mm
+        ratio = 0.60 if piece_mat == "alu" else 0.50
+        ae = max(1.0, round(diam * ratio))
+        self.ae_mm.set(min(diam, ae))
+
+        # ap par defaut: 70% du max table
+        ap_max = self._get_ap_max(diam, piece_mat, plaq)
+        ap = round(ap_max * 0.7 * 4) / 4  # arrondi 0.25mm
+        self.ap_mm.set(max(0.25, ap))
+
+    def _reset_engagement(self):
+        """Touche 5: 75% ae + ap recommande."""
+        if self.notebook.index(self.notebook.select()) != self.notebook.index(self.tab_outil):
+            return
+        if not self.filtered_tools:
+            return
+        tool = self.filtered_tools[self.current_index]
+        if tool.get("type", "") in CATEGORY_FORETS:
+            return
+        diam = tool.get("diametre", 10.0)
+        piece_mat = self.piece_mat.get()
+        plaq = tool.get("a_plaquettes", False)
+
+        ae = max(1.0, round(diam * 0.75))
+        self.ae_mm.set(min(diam, ae))
+
+        ap_max = self._get_ap_max(diam, piece_mat, plaq)
+        ap = round(ap_max * 0.8 * 4) / 4
+        self.ap_mm.set(max(0.25, ap))
+        self._on_engagement_changed()
+
+    def _adjust_ae(self, direction):
+        """+/- : ae par pas de ~10% du diametre, arrondi 1mm."""
+        if self.notebook.index(self.notebook.select()) != self.notebook.index(self.tab_outil):
+            return
+        if not self.filtered_tools:
+            return
+        tool = self.filtered_tools[self.current_index]
+        if tool.get("type", "") in CATEGORY_FORETS:
+            return
+        diam = tool.get("diametre", 10.0)
+        step = max(1.0, round(diam * 0.1))
+        new_ae = self.ae_mm.get() + step * direction
+        new_ae = max(1.0, min(diam, round(new_ae)))
+        self.ae_mm.set(new_ae)
+        self._on_engagement_changed()
+
+    def _adjust_ap(self, direction):
+        """9=augmenter ap, 6=diminuer. Pas de 0.25mm."""
+        if self.notebook.index(self.notebook.select()) != self.notebook.index(self.tab_outil):
+            return
+        if not self.filtered_tools:
+            return
+        tool = self.filtered_tools[self.current_index]
+        if tool.get("type", "") in CATEGORY_FORETS:
+            return
+        diam = tool.get("diametre", 10.0)
+        piece_mat = self.piece_mat.get()
+        plaq = tool.get("a_plaquettes", False)
+        ae_ratio = self.ae_mm.get() / max(diam, 0.1)
+        ap_max_eff = self._get_effective_ap_max(diam, piece_mat, plaq, ae_ratio)
+
+        new_ap = self.ap_mm.get() + 0.25 * direction
+        new_ap = round(new_ap * 4) / 4
+        new_ap = max(0.25, min(ap_max_eff * 1.5, new_ap))
+        self.ap_mm.set(new_ap)
+        self._on_engagement_changed()
+
+    def _on_engagement_changed(self):
+        self._update_tool_display(keep_engagement=True)
+
+    def _recalc_with_engagement(self, tool, piece_mat):
+        """Recalcule Vf effectif avec correction ae + ap, retourne params enrichis."""
+        params = calc_cutting_params(tool, piece_mat)
+        diam = params["diam"]
+        if diam <= 0:
+            return params
+        ae = self.ae_mm.get()
+        ap = self.ap_mm.get()
+        ae_ratio = ae / diam
+        plaq = tool.get("a_plaquettes", False)
+        ap_max_base = self._get_ap_max(diam, piece_mat, plaq)
+        ap_max_eff = self._get_effective_ap_max(diam, piece_mat, plaq, ae_ratio)
+        ap_ratio = ap / max(ap_max_eff, 0.01)
+
+        corr = _fz_correction(ae_ratio, ap_ratio)
+        fz_eff = params["fz"] * corr
+        feed_raw = fz_eff * params["nb_dents"] * params["rpm"]
+        feed_capped = feed_raw > VF_MAX_STEPPER
+        feed_eff = min(feed_raw, VF_MAX_STEPPER) if feed_capped else feed_raw
+        q = ap * ae * feed_eff / 1000  # cm3/min
+
+        params.update({
+            "fz_eff": round(fz_eff, 4), "feed_eff": round(feed_eff, 1),
+            "feed_raw": round(feed_raw, 1), "feed_capped": feed_capped,
+            "ae": ae, "ap": ap, "ae_ratio": ae_ratio, "ap_ratio": ap_ratio,
+            "ap_max_eff": round(ap_max_eff, 2), "ap_max_base": round(ap_max_base, 2),
+            "q": round(q, 2), "correction": corr,
+        })
+        return params
+
+    def _check_conditions(self, params, tool, piece_mat):
+        """Retourne (status, message). status = 'ok'|'warning'|'block'."""
+        diam = params.get("diam", 0)
+        if diam <= 0:
+            return "ok", ""
+        ap = params.get("ap", 0)
+        ae_ratio = params.get("ae_ratio", 0.5)
+        q = params.get("q", 0)
+        ap_max_eff = params.get("ap_max_eff", 2.0)
+
+        msgs = []
+        blocked = False
+
+        if ap > ap_max_eff * 1.3:
+            msgs.append(f"ap={ap:.2f} DEPASSE ({ap_max_eff:.1f}mm max)")
+            blocked = True
+        elif ap > ap_max_eff:
+            msgs.append(f"ap eleve ({ap:.2f} > {ap_max_eff:.1f}mm)")
+
+        if ae_ratio > 0.85 and ap > ap_max_eff * 0.6:
+            msgs.append("Rainurage + ap eleve")
+            if ap > ap_max_eff * 0.8:
+                blocked = True
+
+        if piece_mat == "acier":
+            if q > 3.0:
+                msgs.append(f"Q={q:.1f} cm3/min EXCESSIF")
+                blocked = True
+            elif q > 1.5:
+                msgs.append(f"Q={q:.1f} cm3/min (limite)")
+        else:
+            if q > 15.0:
+                msgs.append(f"Q={q:.1f} cm3/min EXCESSIF")
+                blocked = True
+            elif q > 8.0:
+                msgs.append(f"Q={q:.1f} cm3/min (limite)")
+
+        if blocked:
+            return "block", " | ".join(msgs)
+        elif msgs:
+            return "warning", " | ".join(msgs)
+        return "ok", ""
+
+    def _draw_engagement(self):
+        c = self.eng_canvas
+        c.delete("all")
+        cw = c.winfo_width()
+        ch = c.winfo_height()
+        if cw < 20 or ch < 20:
+            return
+
+        if not self.filtered_tools:
+            return
+        tool = self.filtered_tools[self.current_index]
+
+        if tool.get("type", "") in CATEGORY_FORETS:
+            c.create_text(cw // 2, ch // 2, text="Foret\n(pas d'engagement ae/ap)",
+                          font=("Helvetica", 13), justify="center", fill="#888")
+            return
+
+        diam = tool.get("diametre", 10.0)
+        ae = self.ae_mm.get()
+        ap = self.ap_mm.get()
+        if diam <= 0:
+            return
+
+        margin = 15
+        mid_y = ch // 2
+
+        # ── VUE DE DESSUS (moitie haute) ──
+        tv_h = mid_y - margin - 5
+        tv_w = cw - 2 * margin
+        # Echelle : le diametre doit tenir dans la vue
+        sc = min(tv_w / (diam * 2.2), tv_h / (diam * 1.3))
+
+        # Piece (rectangle gris, cote gauche)
+        wp_w = diam * 1.4 * sc
+        wp_h = diam * 1.0 * sc
+        wp_x = margin + 5
+        wp_cy = margin + tv_h / 2
+        wp_y1 = wp_cy - wp_h / 2
+        wp_y2 = wp_cy + wp_h / 2
+        c.create_rectangle(wp_x, wp_y1, wp_x + wp_w, wp_y2,
+                           fill="#D0D0D0", outline="#999")
+
+        # Outil (cercle bleu, chevauche la piece de ae)
+        r_px = diam / 2 * sc
+        ae_px = ae * sc
+        # Centre du cercle: le bord gauche du cercle est a (wp_x+wp_w - ae_px)
+        tool_cx = wp_x + wp_w - ae_px + r_px
+        tool_cy = wp_cy
+        c.create_oval(tool_cx - r_px, tool_cy - r_px,
+                      tool_cx + r_px, tool_cy + r_px,
+                      outline="#2196F3", width=2)
+
+        # Zone de coupe (orange) = intersection approchee
+        ol = wp_x + wp_w - ae_px
+        orr = wp_x + wp_w
+        ot = max(wp_y1, tool_cy - r_px)
+        ob = min(wp_y2, tool_cy + r_px)
+        if orr > ol and ob > ot:
+            c.create_rectangle(ol, ot, orr, ob, fill="#FF8C00", outline="")
+
+        # Cote ae
+        ay = tool_cy + r_px + 10
+        c.create_line(ol, ay, orr, ay, fill="black")
+        c.create_line(ol, ay - 3, ol, ay + 3, fill="black")
+        c.create_line(orr, ay - 3, orr, ay + 3, fill="black")
+        pct = ae / diam * 100
+        c.create_text((ol + orr) / 2, ay + 10,
+                      text=f"ae={ae:.0f}mm ({pct:.0f}%)", font=("Helvetica", 9))
+
+        # Fleche feed
+        fy = wp_y1 - 6
+        c.create_line(wp_x + 5, fy, wp_x + wp_w - 5, fy,
+                      fill="#666", arrow="last")
+        c.create_text(wp_x + wp_w / 2, fy - 8, text="feed",
+                      font=("Helvetica", 8), fill="#666")
+
+        c.create_text(margin, margin - 2, text="Vue dessus", anchor="nw",
+                      font=("Helvetica", 8, "italic"), fill="#AAA")
+
+        # ── Separateur ──
+        c.create_line(margin, mid_y, cw - margin, mid_y, fill="#CCC", dash=(4, 4))
+
+        # ── VUE DE COTE (moitie basse) ──
+        sv_top = mid_y + 8
+        sv_h = ch - sv_top - margin
+        # Echelle: ap doit etre visible (min 20px)
+        ap_max_vis = max(ap, diam * 0.3)
+        sc2 = min(tv_w / (diam * 2), sv_h / (ap_max_vis * 2.5))
+        sc2 = min(sc2, sc)  # coherent avec vue dessus
+
+        surface_y = sv_top + 25
+        ap_px = max(8, ap * sc2)  # min 8px pour visibilite
+        tool_w_px = diam * sc2
+
+        # Surface piece
+        c.create_line(margin + 5, surface_y, cw - margin - 5, surface_y,
+                      fill="#666", width=2)
+
+        # Piece sous la surface
+        c.create_rectangle(margin + 5, surface_y, cw - margin - 5,
+                           surface_y + sv_h - 15, fill="#D0D0D0", outline="#999")
+
+        # Zone coupee (orange)
+        cut_x = cw / 2 - tool_w_px / 2
+        c.create_rectangle(cut_x, surface_y, cut_x + tool_w_px,
+                           surface_y + ap_px, fill="#FF8C00", outline="#CC6600", width=2)
+
+        # Profil outil (bleu pointille au-dessus)
+        c.create_rectangle(cut_x, surface_y - 20, cut_x + tool_w_px,
+                           surface_y + ap_px, outline="#2196F3", width=2, dash=(3, 3))
+
+        # Cote ap
+        ax = cut_x + tool_w_px + 8
+        c.create_line(ax, surface_y, ax, surface_y + ap_px, fill="black")
+        c.create_line(ax - 3, surface_y, ax + 3, surface_y, fill="black")
+        c.create_line(ax - 3, surface_y + ap_px, ax + 3, surface_y + ap_px, fill="black")
+        c.create_text(ax + 5, surface_y + ap_px / 2,
+                      text=f"ap={ap:.2f}mm", font=("Helvetica", 9), anchor="w")
+
+        c.create_text(margin, sv_top - 2, text="Vue cote", anchor="nw",
+                      font=("Helvetica", 8, "italic"), fill="#AAA")
 
     # ── Position tab ──
     def _build_position_tab(self, tab):
         root = ttk.Frame(tab, padding=6)
         root.pack(fill="both", expand=True)
         root.columnconfigure(0, weight=1)
-        root.columnconfigure(1, weight=1)
 
-        # ── Colonne gauche : position X + jog ──
-        left = ttk.LabelFrame(root, text="Position X", padding=6)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=(0, 4))
-        left.columnconfigure(0, weight=1)
+        # ── Haut : position X + jog + retour butées ──
+        top = ttk.LabelFrame(root, text="Position X", padding=6)
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        top.columnconfigure(0, weight=1)
 
-        pos_frame = ttk.Frame(left)
-        pos_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        ttk.Label(pos_frame, text="X =", font=("Helvetica", 18, "bold")).pack(side="left")
-        self.lbl_pos_x = ttk.Label(pos_frame, textvariable=self.pos_x_str,
+        # Position display + ZERO sur la même ligne
+        pos_line = ttk.Frame(top)
+        pos_line.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        ttk.Label(pos_line, text="X =", font=("Helvetica", 18, "bold")).pack(side="left")
+        self.lbl_pos_x = ttk.Label(pos_line, textvariable=self.pos_x_str,
                                     font=("Helvetica", 32, "bold"))
-        self.lbl_pos_x.pack(side="left", padx=(6, 0))
-        ttk.Label(pos_frame, text="mm", font=("Helvetica", 18)).pack(side="left", padx=(4, 0))
+        self.lbl_pos_x.pack(side="left", padx=(6, 10))
+        ttk.Label(pos_line, text="mm", font=("Helvetica", 18)).pack(side="left")
+        ttk.Button(pos_line, text="ZERO X", style='Med.TButton',
+                   command=self._zero_x).pack(side="right", padx=(10, 0))
+        self.lbl_limit_status = ttk.Label(pos_line, text="", style='Info.TLabel')
+        self.lbl_limit_status.pack(side="right", padx=(10, 0))
 
-        # Jog buttons
-        jog_frame = ttk.Frame(left)
-        jog_frame.grid(row=1, column=0, sticky="ew", pady=(0, 6))
-        jog_values = [("-10", -10), ("-1", -1), ("-0.1", -0.1),
-                      ("+0.1", 0.1), ("+1", 1), ("+10", 10)]
-        for c, (txt, delta) in enumerate(jog_values):
-            ttk.Button(jog_frame, text=txt, style='Jog.TButton',
-                       command=lambda d=delta: self._jog_x(d)).grid(
-                row=0, column=c, sticky="nsew", padx=2, pady=2, ipady=4)
-            jog_frame.columnconfigure(c, weight=1)
+        # Jog buttons + retour butées sur 2 lignes
+        btn_frame = ttk.Frame(top)
+        btn_frame.grid(row=1, column=0, sticky="ew")
+        jog_values = [("<<G", "left_lim"), ("-10", -10), ("-1", -1), ("-0.1", -0.1),
+                      ("+0.1", 0.1), ("+1", 1), ("+10", 10), ("D>>", "right_lim")]
+        for c, (txt, val) in enumerate(jog_values):
+            if val == "left_lim":
+                cmd = lambda: self._goto_limit("left")
+            elif val == "right_lim":
+                cmd = lambda: self._goto_limit("right")
+            else:
+                cmd = lambda d=val: self._jog_x(d)
+            ttk.Button(btn_frame, text=txt, style='Jog.TButton',
+                       command=cmd).grid(row=0, column=c, sticky="nsew", padx=2, pady=2, ipady=2)
+            btn_frame.columnconfigure(c, weight=1)
 
-        # Zero + Home buttons
-        ctl_frame = ttk.Frame(left)
-        ctl_frame.grid(row=2, column=0, sticky="ew", pady=(0, 4))
-        ttk.Button(ctl_frame, text="ZERO X (ici)", style='Med.TButton',
-                   command=self._zero_x).grid(row=0, column=0, sticky="nsew", padx=2, ipady=4)
-        ctl_frame.columnconfigure(0, weight=1)
+        # ── Bas : butées logicielles ──
+        bot = ttk.LabelFrame(root, text="Butees logicielles X", padding=6)
+        bot.grid(row=1, column=0, sticky="nsew", pady=(0, 4))
+        root.rowconfigure(1, weight=1)
+        bot.columnconfigure(0, weight=1)
+        bot.columnconfigure(1, weight=0)
+        bot.columnconfigure(2, weight=1)
 
-        # Status butée
-        self.lbl_limit_status = ttk.Label(left, text="", style='Info.TLabel')
-        self.lbl_limit_status.grid(row=3, column=0, sticky="w", pady=(2, 0))
+        # Checkbox activer
+        ttk.Checkbutton(bot, text="Activer les butees",
+                        variable=self.limit_x_enabled,
+                        command=self._update_limit_display).grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
 
-        # ── Colonne droite : butées logicielles ──
-        right = ttk.LabelFrame(root, text="Butees logicielles X", padding=6)
-        right.grid(row=0, column=1, sticky="nsew", padx=(4, 0), pady=(0, 4))
-        right.columnconfigure(0, weight=1)
-        right.columnconfigure(1, weight=1)
+        # Gauche | séparateur | Droite
+        # Gauche
+        lf = ttk.Frame(bot)
+        lf.grid(row=1, column=0, sticky="nsew", padx=(0, 4))
+        ttk.Label(lf, text="GAUCHE", font=("Helvetica", 13, "bold")).pack(anchor="w")
+        self.lbl_limit_left = ttk.Label(lf, text="Non definie",
+                                         font=("Helvetica", 18, "bold"))
+        self.lbl_limit_left.pack(anchor="w", pady=(2, 4))
+        btn_lf = ttk.Frame(lf)
+        btn_lf.pack(fill="x")
+        ttk.Button(btn_lf, text="Poser ICI", style='Med.TButton',
+                   command=self._set_limit_left).pack(side="left", expand=True, fill="x", padx=(0, 2))
+        self._num_entry(lf, self.limit_x_left, width=7, decimals=1)
+        lf.winfo_children()[-1].pack(fill="x", pady=(4, 0))
 
-        # Enable/disable
-        chk = ttk.Checkbutton(right, text="Activer les butees",
-                               variable=self.limit_x_enabled,
-                               command=self._update_limit_display)
-        chk.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        # Séparateur vertical
+        ttk.Separator(bot, orient="vertical").grid(row=1, column=1, sticky="ns", padx=8)
 
-        # Butée gauche
-        ttk.Label(right, text="Butee GAUCHE :", font=("Helvetica", 14)).grid(
-            row=1, column=0, sticky="w", pady=(0, 2))
-        self.lbl_limit_left = ttk.Label(right, text="Non definie",
-                                         font=("Helvetica", 16, "bold"))
-        self.lbl_limit_left.grid(row=2, column=0, sticky="w", pady=(0, 4))
-        ttk.Button(right, text="Definir ICI", style='Med.TButton',
-                   command=self._set_limit_left).grid(
-            row=3, column=0, sticky="ew", padx=(0, 2), ipady=4)
+        # Droite
+        rf = ttk.Frame(bot)
+        rf.grid(row=1, column=2, sticky="nsew", padx=(4, 0))
+        ttk.Label(rf, text="DROITE", font=("Helvetica", 13, "bold")).pack(anchor="w")
+        self.lbl_limit_right = ttk.Label(rf, text="Non definie",
+                                          font=("Helvetica", 18, "bold"))
+        self.lbl_limit_right.pack(anchor="w", pady=(2, 4))
+        btn_rf = ttk.Frame(rf)
+        btn_rf.pack(fill="x")
+        ttk.Button(btn_rf, text="Poser ICI", style='Med.TButton',
+                   command=self._set_limit_right).pack(side="left", expand=True, fill="x", padx=(0, 2))
+        self._num_entry(rf, self.limit_x_right, width=7, decimals=1)
+        rf.winfo_children()[-1].pack(fill="x", pady=(4, 0))
 
-        # Butée droite
-        ttk.Label(right, text="Butee DROITE :", font=("Helvetica", 14)).grid(
-            row=1, column=1, sticky="w", padx=(10, 0), pady=(0, 2))
-        self.lbl_limit_right = ttk.Label(right, text="Non definie",
-                                          font=("Helvetica", 16, "bold"))
-        self.lbl_limit_right.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=(0, 4))
-        ttk.Button(right, text="Definir ICI", style='Med.TButton',
-                   command=self._set_limit_right).grid(
-            row=3, column=1, sticky="ew", padx=(2, 0), ipady=4)
-
-        # Saisie manuelle des limites
-        ttk.Separator(right).grid(row=4, column=0, columnspan=2, sticky="ew", pady=8)
-        manual_frame = ttk.Frame(right)
-        manual_frame.grid(row=5, column=0, columnspan=2, sticky="ew")
-        manual_frame.columnconfigure(1, weight=1)
-        manual_frame.columnconfigure(3, weight=1)
-
-        ttk.Label(manual_frame, text="G:").grid(row=0, column=0, sticky="e", padx=(0, 2))
-        self._num_entry(manual_frame, self.limit_x_left, width=7, decimals=1,
-                        row=0, column=1, sticky="ew")
-        ttk.Label(manual_frame, text="mm   D:").grid(row=0, column=2, sticky="e", padx=(8, 2))
-        self._num_entry(manual_frame, self.limit_x_right, width=7, decimals=1,
-                        row=0, column=3, sticky="ew")
-        ttk.Label(manual_frame, text="mm").grid(row=0, column=4, sticky="w", padx=(2, 0))
-
-        # Effacer butées
-        ttk.Button(right, text="Effacer les butees", style='Med.TButton',
+        # Effacer
+        ttk.Button(bot, text="Effacer les butees", style='Med.TButton',
                    command=self._clear_limits).grid(
-            row=6, column=0, columnspan=2, sticky="ew", pady=(8, 0), ipady=4)
+            row=2, column=0, columnspan=3, sticky="ew", pady=(8, 0), ipady=2)
 
-        # Barre info en bas
-        info_frame = ttk.Frame(root)
-        info_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        self.lbl_pos_info = ttk.Label(info_frame, text="Butees software = protection, pas un remplacement de fin de course hardware",
-                                       style='Small.TLabel')
-        self.lbl_pos_info.pack(anchor="center")
+        # Info
+        ttk.Label(root, text="Butees = protection software, pas un remplacement de fin de course",
+                  style='Small.TLabel').grid(row=2, column=0, sticky="w", pady=(2, 0))
 
     # ── Position X helpers ──
     def _steps_per_mm(self):
@@ -518,19 +919,50 @@ class App(tk.Tk):
         return target - current
 
     def _jog_x(self, delta_mm):
-        """Déplacement X simulé avec respect des butées."""
+        """Déplacement X avec respect des butées. Envoie la commande au MotorController."""
         if self.io_active:
             return
         clamped = self._clamp_move_x(delta_mm)
         if abs(clamped) < 1e-6:
-            # Bloqué par butée
             self.lbl_limit_status.config(text="BUTEE ATTEINTE !", style='Warn.TLabel')
             self.after(1500, self._update_limit_display)
             return
-        clamped_steps = round(clamped * self._steps_per_mm())
-        self.pos_x_steps += clamped_steps
-        self._update_pos_x_from_steps()
-        self._update_limit_display()
+        # Avance = depuis l'outil sélectionné, ou rapide si foret/pas d'outil
+        feed = self._current_feed_x()
+        self.motor.send(CmdType.MOVE_X, clamped, feed)
+
+    def _goto_limit(self, side):
+        """Retour rapide vers la butée gauche ou droite via MotorController."""
+        if self.io_active:
+            return
+        if side == "left":
+            if not self.limit_x_left_set:
+                self.lbl_limit_status.config(text="Butee gauche non definie", style='Warn.TLabel')
+                self.after(1500, self._update_limit_display)
+                return
+            target = self.limit_x_left.get()
+        else:
+            if not self.limit_x_right_set:
+                self.lbl_limit_status.config(text="Butee droite non definie", style='Warn.TLabel')
+                self.after(1500, self._update_limit_display)
+                return
+            target = self.limit_x_right.get()
+
+        delta = target - self.pos_x_mm.get()
+        if abs(delta) < 1e-6:
+            return
+        rapid = self.rapid_x_speed.get()
+        self.motor.send(CmdType.MOVE_X, delta, rapid)
+
+    def _current_feed_x(self):
+        """Retourne l'avance X courante : feed outil ou rapide si foret/pas d'outil."""
+        if not self.filtered_tools:
+            return self.rapid_x_speed.get()
+        tool = self.filtered_tools[self.current_index]
+        if tool.get("type", "") in CATEGORY_FORETS:
+            return self.rapid_x_speed.get()
+        params = self._recalc_with_engagement(tool, self.piece_mat.get())
+        return params.get("feed_eff", self.rapid_x_speed.get())
 
     # ── Trapèzes & Z tab ──
     def _build_trapezes_tab(self, tab):
@@ -718,7 +1150,7 @@ class App(tk.Tk):
         self.current_index = (self.current_index + direction) % len(self.filtered_tools)
         self._update_tool_display()
 
-    def _update_tool_display(self):
+    def _update_tool_display(self, keep_engagement=False):
         if not self.filtered_tools:
             self.lbl_tool_name.config(text="Aucun outil")
             self.lbl_tool_type.config(text="")
@@ -727,15 +1159,20 @@ class App(tk.Tk):
             self.lbl_matiere.config(text="---")
             self.lbl_revet.config(text="---")
             self.lbl_tool_notes.config(text="")
-            self.lbl_tool_counter.config(text="0 / 0")
+            self.lbl_tool_counter.config(text="0/0")
             self.lbl_rpm.config(text="---")
             self.lbl_feed.config(text="---")
+            self.lbl_ae.config(text="---"); self.lbl_ae_pct.config(text="")
+            self.lbl_ap.config(text="---"); self.lbl_ap_info.config(text="")
+            self.lbl_q.config(text="---")
             self.lbl_details.config(text="")
             self.lbl_limit.config(text="")
             self.lbl_foret_info.config(text="")
+            self._draw_engagement()
             return
 
         tool = self.filtered_tools[self.current_index]
+        tool_id = id(tool)
         nom = tool.get("nom", "Sans nom") or "Sans nom"
         tool_type = tool.get("type", "")
         diam = tool.get("diametre", 0)
@@ -744,7 +1181,9 @@ class App(tk.Tk):
         revet = tool.get("revetement", "Aucun")
         notes = tool.get("notes", "")
         is_foret = tool_type in CATEGORY_FORETS
+        piece = self.piece_mat.get()
 
+        # Info outil
         self.lbl_tool_name.config(text=nom)
         self.lbl_tool_type.config(text=tool_type)
         self.lbl_diam.config(text=f"{diam} mm")
@@ -755,60 +1194,112 @@ class App(tk.Tk):
         self.lbl_tool_counter.config(
             text=f"{self.current_index + 1} / {len(self.filtered_tools)}")
 
-        # Calcul paramètres de coupe
-        piece = self.piece_mat.get()
-        params = calc_cutting_params(tool, piece)
+        # Recalculer engagement par defaut si outil a change
+        if not keep_engagement or self._last_tool_id != tool_id:
+            self._last_tool_id = tool_id
+            self._calc_default_engagement()
 
         if is_foret:
-            # Foret : RPM affiché, mais avance X = rapide (juste pour positionner)
-            self.lbl_rpm.config(text=f"{params['rpm']:,}".replace(",", " "))
-            rapid = self.rapid_x_speed.get()
-            self.lbl_feed.config(text=f"{rapid:,.0f}".replace(",", " "))
-            self.lbl_details.config(
-                text=f"D={diam} mm | Vc={params['vc']} m/min | fz={params['fz']:.3f} mm/dent")
-            self.lbl_foret_info.config(text="Foret : vitesse X = rapide (positionnement)")
-        else:
+            params = calc_cutting_params(tool, piece)
             self.lbl_rpm.config(text=f"{params['rpm']:,}".replace(",", " "))
             self.lbl_feed.config(text=f"{params['feed']:,.0f}".replace(",", " "))
+            self.lbl_ae.config(text="---"); self.lbl_ae_pct.config(text="")
+            self.lbl_ap.config(text="---"); self.lbl_ap_info.config(text="")
+            self.lbl_q.config(text="---")
+            vc_r = params.get("vc_reelle", 0)
+            vc_c = params.get("vc", 0)
+            if vc_r and vc_c and vc_r > vc_c * 1.2:
+                vc_txt = f"Vc={vc_r:.0f} (cible {vc_c})"
+            else:
+                vc_txt = f"Vc={vc_c}"
             self.lbl_details.config(
-                text=f"D={diam} mm | z={nb_dents} | Vc={params['vc']} m/min | fz={params['fz']:.3f} mm/dent")
-            self.lbl_foret_info.config(text="")
+                text=f"D={diam} | {vc_txt} m/min | fz={params['fz']:.3f}")
+            self.lbl_foret_info.config(text=f"Foret: avance Z = {params['feed']:.0f} mm/min")
+            # Warnings forets
+            foret_warns = []
+            if params["limited"]:
+                foret_warns.append(f"RPM bride ({DEFAULT_SPINDLE_MAX_RPM})")
+            elif params["boosted"]:
+                foret_warns.append(f"RPM min ({DEFAULT_SPINDLE_MIN_RPM})")
+            if vc_r and vc_c and vc_r > vc_c * 1.2:
+                foret_warns.append(f"Vc reelle {vc_r:.0f}>{vc_c}")
+            self.lbl_limit.config(
+                text=" | ".join(foret_warns) if foret_warns else "",
+                style='Warn.TLabel' if foret_warns else 'TLabel')
+            self._draw_engagement()
+            return
 
-        if params["limited"]:
-            self.lbl_limit.config(text=f"Limite par broche max ({DEFAULT_SPINDLE_MAX_RPM} RPM)")
-        elif params["boosted"]:
-            self.lbl_limit.config(text=f"Force au RPM min ({DEFAULT_SPINDLE_MIN_RPM} RPM)")
+        # Fraise: recalcul avec engagement
+        params = self._recalc_with_engagement(tool, piece)
+        status, msg = self._check_conditions(params, tool, piece)
+
+        self.lbl_rpm.config(text=f"{params['rpm']:,}".replace(",", " "))
+
+        if status == "block":
+            self.lbl_feed.config(text="BLOQUE")
         else:
-            self.lbl_limit.config(text="")
+            self.lbl_feed.config(text=f"{params['feed_eff']:,.0f}".replace(",", " "))
+
+        # ae / ap display
+        ae_pct = params["ae_ratio"] * 100
+        self.lbl_ae.config(text=f"{params['ae']:.0f} mm")
+        self.lbl_ae_pct.config(text=f"({ae_pct:.0f}% D)")
+
+        self.lbl_ap.config(text=f"{params['ap']:.2f} mm")
+        self.lbl_ap_info.config(text=f"(max {params['ap_max_eff']:.1f})")
+
+        self.lbl_q.config(text=f"{params['q']:.1f} cm3/min")
+
+        corr = params.get("correction", 1.0)
+        corr_txt = f" fz x{corr:.2f}" if abs(corr - 1.0) > 0.01 else ""
+        vc_reelle = params.get("vc_reelle", 0)
+        vc_cible = params.get("vc", 0)
+        vc_txt = f"Vc={vc_cible}"
+        if vc_reelle and vc_cible and vc_reelle > vc_cible * 1.2:
+            vc_txt = f"Vc={vc_reelle:.0f} (cible {vc_cible})"
+        self.lbl_details.config(
+            text=f"{vc_txt} | fz={params['fz']:.3f}{corr_txt}")
+        self.lbl_foret_info.config(text="")
+
+        # Warnings / limits
+        limit_parts = []
+        if params["limited"]:
+            limit_parts.append(f"RPM bride ({DEFAULT_SPINDLE_MAX_RPM})")
+        elif params["boosted"]:
+            limit_parts.append(f"RPM min ({DEFAULT_SPINDLE_MIN_RPM})")
+
+        # Warning Vc réelle trop haute (gros outils, RPM plancher)
+        if vc_reelle and vc_cible and vc_reelle > vc_cible * 1.2:
+            limit_parts.append(f"Vc reelle {vc_reelle:.0f}>{vc_cible}")
+
+        # Warning Vf cappé par vitesse stepper
+        if params.get("feed_capped"):
+            limit_parts.append(f"Vf cappe {VF_MAX_STEPPER} (theo {params['feed_raw']:.0f})")
+
+        if status == "block":
+            limit_parts.append(f"STOP: {msg}")
+            self.lbl_limit.config(text=" | ".join(limit_parts), style='Warn.TLabel')
+        elif status == "warning" or params.get("feed_capped") or (vc_reelle and vc_cible and vc_reelle > vc_cible * 1.2):
+            if msg:
+                limit_parts.append(msg)
+            self.lbl_limit.config(text=" | ".join(limit_parts), style='Warn.TLabel')
+        else:
+            self.lbl_limit.config(text=" | ".join(limit_parts) if limit_parts else "")
+
+        self._draw_engagement()
 
     # ════════════════════════════════════════════
     #  Z HOLD-TO-MOVE (simulation)
     # ════════════════════════════════════════════
     def _z_hold(self, up):
         if self.io_active:
-            return  # Désactivé sur l'onglet I/O
-        if getattr(self, '_z_running', False):
             return
-        self._z_running = True
+        direction = 1 if up else -1
         speed = max(self.z_vmin.get(), min(self.z_vmax.get(), self.z_vmax.get()))
-        v = speed / 60.0 * (1 if up else -1)
-
-        def run():
-            try:
-                last = time.time()
-                while self._z_running:
-                    now = time.time()
-                    dt = now - last
-                    last = now
-                    new = self.pos_z_mm.get() + v * dt
-                    self.after(0, lambda val=new: self.pos_z_mm.set(round(val, 1)))
-                    time.sleep(0.02)
-            finally:
-                pass
-        threading.Thread(target=run, daemon=True).start()
+        self.motor.send(CmdType.MOVE_Z_START, direction, speed)
 
     def _z_release(self, up):
-        self._z_running = False
+        self.motor.send(CmdType.MOVE_Z_STOP)
 
     # ════════════════════════════════════════════
     #  I/O TAB MANAGEMENT
@@ -901,6 +1392,58 @@ class App(tk.Tk):
     # ════════════════════════════════════════════
     #  SAVE / LOAD CONFIG
     # ════════════════════════════════════════════
+    # ════════════════════════════════════════════
+    #  MOTOR CONTROLLER
+    # ════════════════════════════════════════════
+    def _init_motor(self):
+        """Crée et démarre le MotorController."""
+        motor_cfg = {
+            'steps_rev_x': self.steps_rev_x.get(),
+            'microstep_x': self.microstep_x.get(),
+            'lead_x': self.lead_x.get(),
+            'steps_rev_z': self.steps_rev_z.get(),
+            'microstep_z': self.microstep_z.get(),
+            'lead_z': self.lead_z.get(),
+            'accel_x': self.accel_x.get(),
+            'decel_x': self.decel_x.get(),
+            'rapid_x_speed': self.rapid_x_speed.get(),
+            'z_vmin': self.z_vmin.get(),
+            'z_vmax': self.z_vmax.get(),
+            'z_accel': self.z_accel.get(),
+            'pos_x_steps': self.pos_x_steps,
+        }
+        self.motor, self.cmd_queue, self.status_queue = create_motor_system(motor_cfg)
+        self.motor.start()
+        self._poll_motor_status()
+
+    def _poll_motor_status(self):
+        """Polling status_queue depuis le main thread (Tkinter-safe)."""
+        try:
+            while True:
+                st = self.status_queue.get_nowait()
+                if st.type == StatusType.POSITION:
+                    axis, steps = st.args[0], st.args[1]
+                    if axis == 'x':
+                        self.pos_x_steps = steps
+                        self._update_pos_x_from_steps()
+                    elif axis == 'z':
+                        self.pos_z_mm.set(round(steps / self.motor.steps_per_mm_z, 1))
+                elif st.type == StatusType.MOVE_DONE:
+                    axis, steps_done = st.args[0], st.args[1]
+                    if axis == 'x':
+                        self.pos_x_steps = self.motor.pos_x_steps
+                        self._update_pos_x_from_steps()
+                        self._update_limit_display()
+                elif st.type == StatusType.STOPPED:
+                    axis, reason = st.args[0], st.args[1]
+                    if reason == 'e-stop':
+                        self.lbl_limit_status.config(text="E-STOP !", style='Warn.TLabel')
+                elif st.type == StatusType.ERROR:
+                    print(f"[Motor Error] {st.args[0]}")
+        except Exception:
+            pass  # queue vide
+        self.after(50, self._poll_motor_status)
+
     def _save_config(self):
         data = {
             "accel_x": float(self.accel_x.get()),
@@ -987,6 +1530,13 @@ class App(tk.Tk):
             self.overrideredirect(False)
         except Exception:
             pass
+
+    def destroy(self):
+        # Arrêter le MotorController proprement
+        if hasattr(self, 'motor') and self.motor.is_alive():
+            self.motor.send(CmdType.SHUTDOWN)
+            self.motor.join(timeout=2)
+        super().destroy()
 
 
 # ====== Entrée ======

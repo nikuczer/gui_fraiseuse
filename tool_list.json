@@ -16,7 +16,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 360.0
+    "vf_alu": 198.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 28.3
   },
   {
     "nom": "Foret HSS 3.5mm",
@@ -35,7 +37,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 360.0
+    "vf_alu": 198.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 33.0
   },
   {
     "nom": "Foret HSS 4.0mm",
@@ -54,7 +58,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 360.0
+    "vf_alu": 198.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 37.7
   },
   {
     "nom": "Foret HSS 4.5mm",
@@ -73,7 +79,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 360.0
+    "vf_alu": 198.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 42.4
   },
   {
     "nom": "Foret HSS 5.0mm",
@@ -92,7 +100,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 360.0
+    "vf_alu": 198.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 47.1
   },
   {
     "nom": "Foret HSS 5.5mm",
@@ -111,7 +121,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 360.0
+    "vf_alu": 198.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 51.8
   },
   {
     "nom": "Foret HSS 6.0mm",
@@ -130,7 +142,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 360.0
+    "vf_alu": 198.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 56.5
   },
   {
     "nom": "Foret HSS 6.5mm",
@@ -149,7 +163,9 @@
     "fz_max_alu": 0.065,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 390.0
+    "vf_alu": 214.5,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 61.3
   },
   {
     "nom": "Foret HSS 7.0mm",
@@ -168,7 +184,9 @@
     "fz_max_alu": 0.07,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 420.0
+    "vf_alu": 231.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 66.0
   },
   {
     "nom": "Foret HSS 7.5mm",
@@ -187,7 +205,9 @@
     "fz_max_alu": 0.075,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 450.0
+    "vf_alu": 247.5,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 70.7
   },
   {
     "nom": "Foret HSS 8.0mm",
@@ -206,7 +226,9 @@
     "fz_max_alu": 0.08,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 480.0
+    "vf_alu": 264.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 75.4
   },
   {
     "nom": "Foret HSS 8.5mm",
@@ -225,7 +247,9 @@
     "fz_max_alu": 0.085,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 510.0
+    "vf_alu": 280.5,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 80.1
   },
   {
     "nom": "Foret HSS 9.0mm",
@@ -244,7 +268,9 @@
     "fz_max_alu": 0.09,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 540.0
+    "vf_alu": 297.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 84.8
   },
   {
     "nom": "Foret HSS 9.5mm",
@@ -263,7 +289,9 @@
     "fz_max_alu": 0.095,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 570.0
+    "vf_alu": 313.5,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 89.5
   },
   {
     "nom": "Foret HSS 10.0mm",
@@ -282,7 +310,9 @@
     "fz_max_alu": 0.1,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 600.0
+    "vf_alu": 330.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 94.2
   },
   {
     "nom": "Foret HSS 10.5mm",
@@ -301,7 +331,9 @@
     "fz_max_alu": 0.105,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 630.0
+    "vf_alu": 346.5,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 99.0
   },
   {
     "nom": "Foret HSS 11.0mm",
@@ -320,7 +352,9 @@
     "fz_max_alu": 0.11,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 660.0
+    "vf_alu": 363.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 103.7
   },
   {
     "nom": "Foret HSS 11.5mm",
@@ -339,7 +373,9 @@
     "fz_max_alu": 0.115,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 690.0
+    "vf_alu": 379.5,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 108.4
   },
   {
     "nom": "Foret HSS 12.0mm",
@@ -358,7 +394,9 @@
     "fz_max_alu": 0.12,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 720.0
+    "vf_alu": 396.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 113.1
   },
   {
     "nom": "Foret HSS 12.5mm",
@@ -377,7 +415,9 @@
     "fz_max_alu": 0.1237,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 742.2
+    "vf_alu": 408.2,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 117.8
   },
   {
     "nom": "Foret HSS 13.0mm",
@@ -396,12 +436,14 @@
     "fz_max_alu": 0.1275,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 765.0
+    "vf_alu": 420.8,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 122.5
   },
   {
     "nom": "Tete a surfacer 50mm APKT1604",
-    "type": "Fraise a surfacer",
-    "matiere": "Carbure revetu",
+    "type": "Fraise à surfacer",
+    "matiere": "Carbure revêtu",
     "revetement": "TiAlN",
     "diametre": 50.0,
     "nb_dents": 5,
@@ -415,7 +457,9 @@
     "fz_max_alu": 0.25,
     "vc_alu": 400,
     "rpm_alu": 2546,
-    "vf_alu": 3182.5
+    "vf_alu": 800,
+    "vc_reelle_acier": 80.0,
+    "vc_reelle_alu": 399.9
   },
   {
     "nom": "Fraise 2T TiN 3mm",
@@ -434,7 +478,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 360.0
+    "vf_alu": 360.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 28.3
   },
   {
     "nom": "Fraise 2T TiN 4mm",
@@ -453,7 +499,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 360.0
+    "vf_alu": 360.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 37.7
   },
   {
     "nom": "Fraise 2T TiN 5mm",
@@ -472,7 +520,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 360.0
+    "vf_alu": 360.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 47.1
   },
   {
     "nom": "Fraise 2T TiN 6mm",
@@ -491,7 +541,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 360.0
+    "vf_alu": 360.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 56.5
   },
   {
     "nom": "Fraise 2T TiN 8mm",
@@ -510,7 +562,9 @@
     "fz_max_alu": 0.08,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 480.0
+    "vf_alu": 480.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 75.4
   },
   {
     "nom": "Fraise 2T TiN 10mm",
@@ -529,7 +583,9 @@
     "fz_max_alu": 0.1,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 600.0
+    "vf_alu": 600.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 94.2
   },
   {
     "nom": "Fraise 2T TiN 12mm",
@@ -548,7 +604,9 @@
     "fz_max_alu": 0.12,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 720.0
+    "vf_alu": 720.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 113.1
   },
   {
     "nom": "Fraise 2T TiN 14mm",
@@ -567,7 +625,9 @@
     "fz_max_alu": 0.135,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 810.0
+    "vf_alu": 800,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 131.9
   },
   {
     "nom": "Fraise 2T TiN 16mm",
@@ -586,7 +646,9 @@
     "fz_max_alu": 0.15,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 900.0
+    "vf_alu": 800,
+    "vc_reelle_acier": 25.1,
+    "vc_reelle_alu": 150.8
   },
   {
     "nom": "Fraise 2T TiN 18mm",
@@ -605,7 +667,9 @@
     "fz_max_alu": 0.165,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 990.0
+    "vf_alu": 800,
+    "vc_reelle_acier": 28.3,
+    "vc_reelle_alu": 169.6
   },
   {
     "nom": "Fraise 2T TiN 20mm",
@@ -624,7 +688,9 @@
     "fz_max_alu": 0.18,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 1080.0
+    "vf_alu": 800,
+    "vc_reelle_acier": 31.4,
+    "vc_reelle_alu": 188.5
   },
   {
     "nom": "Fraise 4T TiN 3mm",
@@ -643,7 +709,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 720.0
+    "vf_alu": 720.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 28.3
   },
   {
     "nom": "Fraise 4T TiN 4mm",
@@ -662,7 +730,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 720.0
+    "vf_alu": 720.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 37.7
   },
   {
     "nom": "Fraise 4T TiN 5mm",
@@ -681,7 +751,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 720.0
+    "vf_alu": 720.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 47.1
   },
   {
     "nom": "Fraise 4T TiN 6mm",
@@ -700,7 +772,9 @@
     "fz_max_alu": 0.06,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 720.0
+    "vf_alu": 720.0,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 56.5
   },
   {
     "nom": "Fraise 4T TiN 8mm",
@@ -719,7 +793,9 @@
     "fz_max_alu": 0.08,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 960.0
+    "vf_alu": 800,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 75.4
   },
   {
     "nom": "Fraise 4T TiN 10mm",
@@ -738,7 +814,9 @@
     "fz_max_alu": 0.1,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 1200.0
+    "vf_alu": 800,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 94.2
   },
   {
     "nom": "Fraise 4T TiN 12mm",
@@ -757,7 +835,9 @@
     "fz_max_alu": 0.12,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 1440.0
+    "vf_alu": 800,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 113.1
   },
   {
     "nom": "Fraise 4T TiN 14mm",
@@ -776,7 +856,9 @@
     "fz_max_alu": 0.135,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 1620.0
+    "vf_alu": 800,
+    "vc_reelle_acier": 25.0,
+    "vc_reelle_alu": 131.9
   },
   {
     "nom": "Fraise 4T TiN 16mm",
@@ -795,7 +877,9 @@
     "fz_max_alu": 0.15,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 1800.0
+    "vf_alu": 800,
+    "vc_reelle_acier": 25.1,
+    "vc_reelle_alu": 150.8
   },
   {
     "nom": "Fraise 4T TiN 18mm",
@@ -814,7 +898,9 @@
     "fz_max_alu": 0.165,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 1980.0
+    "vf_alu": 800,
+    "vc_reelle_acier": 28.3,
+    "vc_reelle_alu": 169.6
   },
   {
     "nom": "Fraise 4T TiN 20mm",
@@ -833,25 +919,29 @@
     "fz_max_alu": 0.18,
     "vc_alu": 200,
     "rpm_alu": 3000,
-    "vf_alu": 2160.0
+    "vf_alu": 800,
+    "vc_reelle_acier": 31.4,
+    "vc_reelle_alu": 188.5
   },
   {
-    "nom": "Outil 45",
-    "type": "Fraise 2 tailles",
-    "matiere": "HSS",
-    "revetement": "Aucun",
-    "diametre": 10.0,
-    "nb_dents": 2,
-    "a_plaquettes": false,
-    "angle": "90°",
-    "notes": "",
-    "fz_max_acier": 0.05,
-    "vc_acier": 25,
-    "rpm_acier": 795,
-    "vf_acier": 79.5,
-    "fz_max_alu": 0.1,
-    "vc_alu": 200,
-    "rpm_alu": 3000,
-    "vf_alu": 600.0
+    "nom": "Tourteau",
+    "type": "Fraise à surfacer",
+    "matiere": "Carbure revêtu",
+    "revetement": "TiAlN",
+    "diametre": 90.0,
+    "nb_dents": 6,
+    "a_plaquettes": true,
+    "angle": "45°",
+    "notes": "Corps HSS-Co, plaquettes carbure TiAlN, alésage 27mm",
+    "fz_max_acier": 0.2121,
+    "vc_acier": 80,
+    "rpm_acier": 500,
+    "vf_acier": 636.3,
+    "fz_max_alu": 0.3536,
+    "vc_alu": 400,
+    "rpm_alu": 1414,
+    "vf_alu": 800,
+    "vc_reelle_acier": 141.4,
+    "vc_reelle_alu": 399.8
   }
 ]

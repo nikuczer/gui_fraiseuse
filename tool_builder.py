@@ -47,6 +47,9 @@ FZ_TABLES = {
                      (12, 0.12), (16, 0.15), (20, 0.18)],
     ("Carbure", "alu"): [(6, 0.08), (8, 0.10), (10, 0.13),
                          (12, 0.15), (16, 0.20), (20, 0.25)],
+    # Plaquettes carbure (fz par dent, indépendant du Ø corps)
+    ("plaquettes", "acier"): [(10, 0.15), (100, 0.15)],
+    ("plaquettes", "alu"): [(10, 0.25), (100, 0.25)],
 }
 
 # Vc recommandées (m/min) pour calcul RPM
@@ -59,6 +62,12 @@ VC_TABLES = {
 
 SPINDLE_MAX_RPM = 3000
 SPINDLE_MIN_RPM = 500
+
+# Vf max réaliste VM32L (mm/min) — au-delà, steppers perdent du couple / bâti vibre
+VF_MAX_VM32L = 800
+
+# Facteur conservateur forets alu (débourrage, rigidité limitée)
+DRILL_ALU_VF_FACTOR = 0.55
 
 
 def _interp_fz(table: list[tuple], diam: float) -> float:
@@ -78,20 +87,52 @@ def _interp_fz(table: list[tuple], diam: float) -> float:
     return table[-1][1]
 
 
-def calc_fz_and_rpm(matiere: str, diametre: float) -> dict:
-    """Calcule fz_max et RPM pour acier et alu."""
+def calc_fz_and_rpm(matiere: str, diametre: float,
+                    a_plaquettes: bool = False, angle_kr: float = 90.0) -> dict:
+    """Calcule fz_max et RPM pour acier et alu.
+
+    Si a_plaquettes=True, utilise les tables fz plaquettes et applique
+    le facteur d'amincissement du copeau selon l'angle κr.
+    """
     # Déterminer la famille matière outil
     mat_key = "Carbure" if "Carbure" in matiere or "Cermet" in matiere else "HSS"
 
+    # Facteur d'amincissement copeau (chip thinning)
+    if a_plaquettes and 0 < angle_kr < 90:
+        sin_kr = math.sin(math.radians(angle_kr))
+        chip_thin = 1.0 / sin_kr  # ex: 45° → 1.414
+    else:
+        chip_thin = 1.0
+
     result = {}
     for piece_mat in ("acier", "alu"):
-        key = (mat_key, piece_mat)
-        table = FZ_TABLES.get(key, FZ_TABLES.get(("HSS", piece_mat), []))
-        fz = _interp_fz(table, diametre)
-        vc = VC_TABLES.get(key, 25)
+        # Plaquettes → table dédiée, sinon table matière outil
+        if a_plaquettes:
+            key_fz = ("plaquettes", piece_mat)
+        else:
+            key_fz = (mat_key, piece_mat)
+        key_vc = (mat_key, piece_mat)
+        # Plaquettes = toujours carbure pour Vc
+        if a_plaquettes:
+            key_vc = ("Carbure", piece_mat)
+
+        table = FZ_TABLES.get(key_fz, FZ_TABLES.get(("HSS", piece_mat), []))
+        fz_base = _interp_fz(table, diametre)
+        fz_eff = round(fz_base * chip_thin, 4)
+
+        vc = VC_TABLES.get(key_vc, 25)
         rpm = int((vc * 1000) / (math.pi * diametre)) if diametre > 0 else 0
         rpm_clamp = max(SPINDLE_MIN_RPM, min(SPINDLE_MAX_RPM, rpm))
-        result[piece_mat] = {"fz_max": fz, "vc": vc, "rpm_ideal": rpm, "rpm_vm32l": rpm_clamp}
+        vc_reelle = round(math.pi * diametre * rpm_clamp / 1000, 1) if diametre > 0 else 0
+        result[piece_mat] = {
+            "fz_base": fz_base,
+            "fz_max": fz_eff,
+            "chip_thin": round(chip_thin, 3),
+            "vc": vc,
+            "vc_reelle": vc_reelle,
+            "rpm_ideal": rpm,
+            "rpm_vm32l": rpm_clamp,
+        }
     return result
 
 
@@ -341,18 +382,54 @@ class ToolBuilderApp(ctk.CTk):
     # ── Mise à jour labels calculés ──────────────────────
     def _update_calc_labels(self):
         tool = self._form_to_tool()
-        params = calc_fz_and_rpm(tool["matiere"], tool["diametre"])
+        angle_kr = self._parse_angle(tool.get("angle", "90"), default=90)
+        params = calc_fz_and_rpm(tool["matiere"], tool["diametre"],
+                                 tool["a_plaquettes"], angle_kr)
         nb_z = max(tool["nb_dents"], 1)
+
+        is_foret = "Foret" in tool.get("type", "")
 
         for mat, lbl in [("acier", self._lbl_acier), ("alu", self._lbl_alu)]:
             p = params[mat]
-            vf = round(p["fz_max"] * nb_z * p["rpm_vm32l"], 1)
+            vf_raw = round(p["fz_max"] * nb_z * p["rpm_vm32l"], 1)
+
+            # Facteur conservateur forets alu (débourrage)
+            if is_foret and mat == "alu":
+                vf_raw = round(vf_raw * DRILL_ALU_VF_FACTOR, 1)
+
+            # Cap Vf réaliste
+            vf_capped = vf_raw > VF_MAX_VM32L
+            vf = min(vf_raw, VF_MAX_VM32L) if vf_capped else vf_raw
+
             rpm_warn = "  ⚠ bridé" if p["rpm_ideal"] > SPINDLE_MAX_RPM else ""
             rpm_low = "  ⚠ trop bas" if p["rpm_ideal"] < SPINDLE_MIN_RPM else ""
+
+            # Warning Vc réelle quand RPM bridé en bas
+            vc_warn = ""
+            if p["rpm_ideal"] < SPINDLE_MIN_RPM and p["vc_reelle"] > p["vc"] * 1.2:
+                vc_warn = f"\n⚠ Vc réelle = {p['vc_reelle']} m/min (cible {p['vc']})"
+
+            # Ligne fz : avec ou sans chip thinning
+            if p["chip_thin"] > 1.01:
+                fz_line = (f"fz base = {p['fz_base']:.3f}  →  "
+                           f"fz eff = {p['fz_max']:.3f} mm/dent  "
+                           f"(×{p['chip_thin']:.2f} amincissement {angle_kr:.0f}°)")
+            else:
+                fz_line = f"fz max = {p['fz_max']:.3f} mm/dent"
+
+            # Ligne Vf
+            if is_foret and mat == "alu":
+                vf_line = f"Vf = {vf} mm/min ({nb_z}L, ×{DRILL_ALU_VF_FACTOR} débourrage)"
+            elif vf_capped:
+                vf_line = f"Vf = {vf} mm/min ⚠ cappé (théo {vf_raw})"
+            else:
+                vf_line = f"Vf = {vf} mm/min ({nb_z}Z)"
+
             lbl.configure(text=(
-                f"fz max = {p['fz_max']:.3f} mm/dent\n"
+                f"{fz_line}\n"
                 f"Vc = {p['vc']} m/min  →  RPM idéal = {p['rpm_ideal']}{rpm_warn}{rpm_low}\n"
-                f"RPM VM32L = {p['rpm_vm32l']}  →  Vf = {vf} mm/min ({nb_z}Z)"
+                f"RPM VM32L = {p['rpm_vm32l']}  →  {vf_line}"
+                f"{vc_warn}"
             ))
 
     # ── Dessin preview outil ─────────────────────────────
@@ -673,14 +750,22 @@ class ToolBuilderApp(ctk.CTk):
             else:
                 t[key] = raw
         # Ajout des paramètres calculés
-        params = calc_fz_and_rpm(t["matiere"], t["diametre"])
+        angle_kr = self._parse_angle(t.get("angle", "90"), default=90)
+        params = calc_fz_and_rpm(t["matiere"], t["diametre"],
+                                 t["a_plaquettes"], angle_kr)
         nb_z = max(t["nb_dents"], 1)
+        is_foret = "Foret" in t.get("type", "")
         for mat in ("acier", "alu"):
             p = params[mat]
             t[f"fz_max_{mat}"] = p["fz_max"]
             t[f"vc_{mat}"] = p["vc"]
+            t[f"vc_reelle_{mat}"] = p["vc_reelle"]
             t[f"rpm_{mat}"] = p["rpm_vm32l"]
-            t[f"vf_{mat}"] = round(p["fz_max"] * nb_z * p["rpm_vm32l"], 1)
+            vf_raw = round(p["fz_max"] * nb_z * p["rpm_vm32l"], 1)
+            # Facteur conservateur forets alu
+            if is_foret and mat == "alu":
+                vf_raw = round(vf_raw * DRILL_ALU_VF_FACTOR, 1)
+            t[f"vf_{mat}"] = min(vf_raw, VF_MAX_VM32L)
         return t
 
     def _on_field_change(self, key, var):
