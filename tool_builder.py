@@ -34,11 +34,9 @@ COATINGS = ["Aucun", "TiN", "TiAlN", "AlCrN", "DLC", "ZrN", "Autre"]
 ANGLES = ["90°", "45°", "60°", "30°", "Autre"]
 
 
-# ── Tables fz max (mm/dent) — interpolation linéaire ──────
+# ── Tables fz max (mm/dent) — FRAISES — interpolation linéaire ──
 # Format: [(diametre_mm, fz_max), ...]
-# Source: conditions de coupe VM32L
-FZ_TABLES = {
-    # (matière outil contient..., matériau pièce) → [(Ø, fz_max)]
+FZ_FRAISE = {
     ("HSS", "acier"): [(4, 0.02), (6, 0.03), (8, 0.04), (10, 0.05),
                        (12, 0.06), (16, 0.07), (20, 0.08)],
     ("Carbure", "acier"): [(4, 0.04), (6, 0.05), (8, 0.06), (10, 0.08),
@@ -47,17 +45,37 @@ FZ_TABLES = {
                      (12, 0.12), (16, 0.15), (20, 0.18)],
     ("Carbure", "alu"): [(6, 0.08), (8, 0.10), (10, 0.13),
                          (12, 0.15), (16, 0.20), (20, 0.25)],
-    # Plaquettes carbure (fz par dent, indépendant du Ø corps)
     ("plaquettes", "acier"): [(10, 0.15), (100, 0.15)],
     ("plaquettes", "alu"): [(10, 0.25), (100, 0.25)],
 }
 
-# Vc recommandées (m/min) pour calcul RPM
-VC_TABLES = {
+# ── Tables fz — FORETS — valeurs = f_per_rev / 2 (2 arêtes) ──
+# Source: abaques forets HSS standard
+FZ_FORET = {
+    ("HSS", "acier"): [(3, 0.025), (5, 0.045), (8, 0.075), (10, 0.09),
+                       (12, 0.11), (13, 0.12), (16, 0.14), (20, 0.16)],
+    ("Carbure", "acier"): [(3, 0.04), (5, 0.06), (8, 0.10), (10, 0.12),
+                           (12, 0.14), (13, 0.15), (16, 0.18), (20, 0.20)],
+    ("HSS", "alu"): [(3, 0.04), (5, 0.07), (8, 0.10), (10, 0.13),
+                     (12, 0.15), (13, 0.16), (16, 0.18), (20, 0.20)],
+    ("Carbure", "alu"): [(3, 0.06), (5, 0.09), (8, 0.14), (10, 0.16),
+                         (12, 0.19), (13, 0.20), (16, 0.22), (20, 0.25)],
+}
+
+# ── Vc recommandées (m/min) ──
+VC_FRAISE = {
     ("HSS", "acier"): 25,
     ("Carbure", "acier"): 80,
     ("HSS", "alu"): 200,
     ("Carbure", "alu"): 400,
+}
+
+# Forets : Vc plus basses (arêtes enfermées dans le trou, pas d'évacuation libre)
+VC_FORET = {
+    ("HSS", "acier"): 25,
+    ("Carbure", "acier"): 60,
+    ("HSS", "alu"): 60,
+    ("Carbure", "alu"): 150,
 }
 
 SPINDLE_MAX_RPM = 3000
@@ -88,39 +106,49 @@ def _interp_fz(table: list[tuple], diam: float) -> float:
 
 
 def calc_fz_and_rpm(matiere: str, diametre: float,
-                    a_plaquettes: bool = False, angle_kr: float = 90.0) -> dict:
+                    a_plaquettes: bool = False, angle_kr: float = 90.0,
+                    tool_type: str = "") -> dict:
     """Calcule fz_max et RPM pour acier et alu.
 
+    Sélectionne les tables foret vs fraise selon tool_type.
     Si a_plaquettes=True, utilise les tables fz plaquettes et applique
     le facteur d'amincissement du copeau selon l'angle κr.
     """
-    # Déterminer la famille matière outil
+    is_drill = tool_type in ("Foret", "Foret à centrer")
     mat_key = "Carbure" if "Carbure" in matiere or "Cermet" in matiere else "HSS"
 
-    # Facteur d'amincissement copeau (chip thinning)
+    # Facteur d'amincissement copeau (chip thinning) — fraises à plaquettes
     if a_plaquettes and 0 < angle_kr < 90:
         sin_kr = math.sin(math.radians(angle_kr))
-        chip_thin = 1.0 / sin_kr  # ex: 45° → 1.414
+        chip_thin = 1.0 / sin_kr
     else:
         chip_thin = 1.0
 
+    # Sélection des tables selon type d'outil
+    if a_plaquettes:
+        fz_tables = FZ_FRAISE
+        vc_tables = VC_FRAISE
+    elif is_drill:
+        fz_tables = FZ_FORET
+        vc_tables = VC_FORET
+    else:
+        fz_tables = FZ_FRAISE
+        vc_tables = VC_FRAISE
+
     result = {}
     for piece_mat in ("acier", "alu"):
-        # Plaquettes → table dédiée, sinon table matière outil
         if a_plaquettes:
             key_fz = ("plaquettes", piece_mat)
+            key_vc = ("Carbure", piece_mat)
         else:
             key_fz = (mat_key, piece_mat)
-        key_vc = (mat_key, piece_mat)
-        # Plaquettes = toujours carbure pour Vc
-        if a_plaquettes:
-            key_vc = ("Carbure", piece_mat)
+            key_vc = (mat_key, piece_mat)
 
-        table = FZ_TABLES.get(key_fz, FZ_TABLES.get(("HSS", piece_mat), []))
+        table = fz_tables.get(key_fz, fz_tables.get(("HSS", piece_mat), []))
         fz_base = _interp_fz(table, diametre)
         fz_eff = round(fz_base * chip_thin, 4)
 
-        vc = VC_TABLES.get(key_vc, 25)
+        vc = vc_tables.get(key_vc, 25)
         rpm = int((vc * 1000) / (math.pi * diametre)) if diametre > 0 else 0
         rpm_clamp = max(SPINDLE_MIN_RPM, min(SPINDLE_MAX_RPM, rpm))
         vc_reelle = round(math.pi * diametre * rpm_clamp / 1000, 1) if diametre > 0 else 0
@@ -384,7 +412,8 @@ class ToolBuilderApp(ctk.CTk):
         tool = self._form_to_tool()
         angle_kr = self._parse_angle(tool.get("angle", "90"), default=90)
         params = calc_fz_and_rpm(tool["matiere"], tool["diametre"],
-                                 tool["a_plaquettes"], angle_kr)
+                                 tool["a_plaquettes"], angle_kr,
+                                 tool.get("type", ""))
         nb_z = max(tool["nb_dents"], 1)
 
         is_foret = "Foret" in tool.get("type", "")
@@ -752,7 +781,8 @@ class ToolBuilderApp(ctk.CTk):
         # Ajout des paramètres calculés
         angle_kr = self._parse_angle(t.get("angle", "90"), default=90)
         params = calc_fz_and_rpm(t["matiere"], t["diametre"],
-                                 t["a_plaquettes"], angle_kr)
+                                 t["a_plaquettes"], angle_kr,
+                                 t.get("type", ""))
         nb_z = max(t["nb_dents"], 1)
         is_foret = "Foret" in t.get("type", "")
         for mat in ("acier", "alu"):

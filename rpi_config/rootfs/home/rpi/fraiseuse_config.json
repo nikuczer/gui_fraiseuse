@@ -1,0 +1,94 @@
+{
+  "vc_alu_min": 60.0,
+  "vc_alu_max": 40.0,
+  "vc_acier_min": 26.0,
+  "vc_acier_max": 25.0,
+  "fz_alu_min": 0.04,
+  "fz_alu_max": 0.015,
+  "fz_acier_min": 0.025,
+  "fz_acier_max": 0.015,
+  "spindle_max_rpm": 2500,
+  "spindle_min_rpm": 500,
+  "jog_speed_x": 300.0,
+  "rapid_x_speed": 500.0,
+  "accel_x": 1000.0,
+  "decel_x": 1000.0,
+  "z_vmin": 500.0,
+  "z_vmax": 2500.0,
+  "z_accel": 100.0,
+  "gpio_cfg": {
+    "OUT": {
+      "X_STEP": {
+        "pin": 13,
+        "active_high": false
+      },
+      "X_DIR": {
+        "pin": 16,
+        "active_high": false
+      },
+      "X_EN": {
+        "pin": 19,
+        "active_high": false
+      },
+      "Z_STEP": {
+        "pin": 12,
+        "active_high": false
+      },
+      "Z_DIR": {
+        "pin": 6,
+        "active_high": true
+      },
+      "Z_EN": {
+        "pin": 5,
+        "active_high": false
+      }
+    },
+    "IN": {
+      "MANUAL": {
+        "pin": 11,
+        "active_high": false
+      },
+      "X_PLUS": {
+        "pin": 17,
+        "active_high": false
+      },
+      "X_MINUS": {
+        "pin": 27,
+        "active_high": true
+      },
+      "X_RAPID": {
+        "pin": 18,
+        "active_high": false
+      },
+      "Z_PLUS": {
+        "pin": 8,
+        "active_high": false
+      },
+      "Z_MINUS": {
+        "pin": 25,
+        "active_high": false
+      },
+      "ENC_CLK": {
+        "pin": 23,
+        "active_high": false
+      },
+      "ENC_DT": {
+        "pin": 24,
+        "active_high": false
+      },
+      "ENC_SW": {
+        "pin": 22,
+        "active_high": true
+      }
+    }
+  },
+  "outputs_disabled": false,
+  "mechanics": {
+    "steps_rev_x": 200,
+    "microstep_x": 8,
+    "lead_x": 2.0,
+    "steps_rev_z": 200,
+    "microstep_z": 2,
+    "lead_z": 4.0
+  }
+}

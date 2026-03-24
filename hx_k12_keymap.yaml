@@ -1,0 +1,21 @@
+# HX-K12 Macro Pad - Configuration
+# 12 touches (3x4) + 2 rotatifs
+# Toutes les touches mappées sur F13-F24 pour être interceptées par Python
+
+orientation: normal
+rows: 3
+columns: 4
+knobs: 2
+
+layers:
+ - buttons:
+   - ["F13", "F14", "F15", "F16"]
+   - ["F17", "F18", "F19", "F20"]
+   - ["F21", "F22", "F23", "F24"]
+   knobs:
+   - ccw: "volumedown"
+     press: "mute"
+     cw: "volumeup"
+   - ccw: "wheelup"
+     press: "click"
+     cw: "wheeldown"

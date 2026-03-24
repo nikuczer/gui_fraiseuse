@@ -1,0 +1,3 @@
+# GUI fraiseuse (Raspberry Pi)
+customtkinter
+pigpio

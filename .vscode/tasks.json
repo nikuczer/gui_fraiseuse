@@ -1,0 +1,20 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "HX-K12: Upload keymap",
+            "type": "shell",
+            "command": "Start-Process python -ArgumentList '${workspaceFolder}/hx_k12_hid_upload.py' -Verb RunAs -Wait",
+            "options": {
+                "shell": {
+                    "executable": "powershell.exe"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        }
+    ]
+}

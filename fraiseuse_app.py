@@ -300,6 +300,7 @@ class App(tk.Tk):
             st.configure('Overlay.TFrame', background='', relief='raised')
             st.configure('Card.TFrame', relief='raised')
             st.configure('Big.TLabel', font=("Helvetica", 28, "bold"))
+            st.configure('Mat.TRadiobutton', font=("Helvetica", 16, "bold"), padding=(10, 8))
             st.configure('Title.TLabel', font=("Helvetica", 20, "bold"))
             st.configure('Cat.TLabel', font=("Helvetica", 14, "bold"), foreground="#555555")
             st.configure('IOon.TLabel', font=("Helvetica", 16, "bold"), foreground="#00AA00")
@@ -381,10 +382,12 @@ class App(tk.Tk):
         self.lbl_tool_counter.pack(anchor="w", pady=(2, 0))
 
         mat_frame = ttk.Frame(left)
-        mat_frame.pack(fill="x", pady=(4, 0))
-        for label, key in (("Acier", "acier"), ("Alu", "alu")):
+        mat_frame.pack(fill="x", pady=(6, 0))
+        for label, key in (("ACIER", "acier"), ("ALU", "alu")):
             ttk.Radiobutton(mat_frame, text=label, value=key, variable=self.piece_mat,
-                            command=self._on_engagement_changed).pack(side="left", padx=4)
+                            command=self._on_engagement_changed,
+                            style='Mat.TRadiobutton').pack(
+                side="left", padx=4, expand=True, fill="x")
 
         # Col 1: Canvas
         canvas_frame = ttk.LabelFrame(root, text="Engagement", padding=2)

@@ -1,0 +1,26 @@
+[Unit]
+Description=Axis UI (Tkinter via X)
+After=network.target getty@tty1.service
+Conflicts=getty@tty1.service
+
+[Service]
+User=rpi
+WorkingDirectory=/home/rpi
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/rpi/.Xauthority
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+# Nettoyage d'anciens locks/autorités X
+ExecStartPre=/usr/bin/rm -f /tmp/.X0-lock /home/rpi/.Xauthority
+# Lance X sur tty1 puis ton ~/.xinitrc (qui lance ton main.py)
+ExecStart=/usr/bin/startx /home/rpi/.xinitrc -- :0 vt1 -keeptty -nolisten tcp
+# À l'arrêt, tuer X et startx de l'utilisateur
+ExecStop=/usr/bin/pkill -u rpi -f 'Xorg :0|startx'
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+

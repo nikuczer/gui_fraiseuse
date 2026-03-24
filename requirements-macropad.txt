@@ -1,0 +1,4 @@
+# HX-K12 macro pad (PC Windows)
+hidapi
+keyboard
+pyyaml
