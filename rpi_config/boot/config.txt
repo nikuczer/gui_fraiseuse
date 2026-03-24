@@ -53,14 +53,15 @@ hdmi_cvt=800 480 60 6 0 0 0
 
 # Additional overlays and parameters are documented /boot/overlays/README
 
-# Enable audio (loads snd_bcm2835)
-dtparam=audio=on
+# Audio désactivé (pas utilisé sur la fraiseuse)
+#dtparam=audio=on
 
-# Automatically load overlays for detected cameras
-camera_auto_detect=1
+# Caméra/DSI désactivés (pas utilisés)
+#camera_auto_detect=1
+#display_auto_detect=1
 
-# Automatically load overlays for detected DSI displays
-display_auto_detect=1
+# Watchdog hardware - redémarre le Pi si freeze
+dtparam=watchdog=on
 
 # Enable DRM VC4 V3D driver
 dtoverlay=vc4-kms-v3d

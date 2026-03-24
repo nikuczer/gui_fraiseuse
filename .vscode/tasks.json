@@ -15,6 +15,92 @@
                 "reveal": "always",
                 "panel": "shared"
             }
+        },
+        {
+            "label": "RPi: Deploy GUI",
+            "detail": "Push fraiseuse_app.py, motor_controller.py, tool_builder.py et fraiseuse_config.json vers le Pi",
+            "type": "shell",
+            "command": "scp fraiseuse_app.py motor_controller.py tool_builder.py gpio_learn.py rpi_config/rootfs/home/rpi/fraiseuse_config.json rpi@192.168.1.50:/home/rpi/ && ssh rpi@192.168.1.50 'sudo systemctl restart axis-ui.service && echo OK: service redemarré'",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "powershell.exe"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "RPi: Deploy tool list",
+            "detail": "Push tool_list.json vers le Pi",
+            "type": "shell",
+            "command": "scp tool_list.json rpi@192.168.1.50:/home/rpi/ && echo OK: tool_list.json envoyé",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "powershell.exe"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "RPi: Deploy config système",
+            "detail": "Push boot/config.txt, systemd service, dhcpcd, fstab etc. vers le Pi",
+            "type": "shell",
+            "command": "scp rpi_config/boot/config.txt rpi@192.168.1.50:/tmp/config.txt && scp rpi_config/rootfs/etc/systemd/system/axis-ui.service rpi@192.168.1.50:/tmp/axis-ui.service && scp rpi_config/rootfs/etc/dhcpcd.conf rpi@192.168.1.50:/tmp/dhcpcd.conf && scp rpi_config/rootfs/etc/fstab rpi@192.168.1.50:/tmp/fstab && scp rpi_config/rootfs/home/rpi/.xinitrc rpi@192.168.1.50:/home/rpi/.xinitrc && ssh rpi@192.168.1.50 'sudo cp /tmp/config.txt /boot/config.txt && sudo cp /tmp/axis-ui.service /etc/systemd/system/axis-ui.service && sudo cp /tmp/dhcpcd.conf /etc/dhcpcd.conf && sudo cp /tmp/fstab /etc/fstab && sudo systemctl daemon-reload && echo OK: config systeme deployee, reboot recommandé'",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "powershell.exe"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "RPi: GPIO Learn",
+            "detail": "Lance gpio_learn.py sur le Pi via SSH (interactif)",
+            "type": "shell",
+            "command": "ssh -t rpi@192.168.1.50 'python3 /home/rpi/gpio_learn.py'",
+            "options": {
+                "shell": {
+                    "executable": "powershell.exe"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            }
+        },
+        {
+            "label": "RPi: SSH",
+            "detail": "Ouvrir une session SSH vers le Pi",
+            "type": "shell",
+            "command": "ssh rpi@192.168.1.50",
+            "options": {
+                "shell": {
+                    "executable": "powershell.exe"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            },
+            "isBackground": true
         }
     ]
 }
